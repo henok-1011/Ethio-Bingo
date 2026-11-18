@@ -57,8 +57,13 @@ let priming = null;
 const clipCache = new Map();
 const missingClips = new Set();
 
+// Bump this whenever a call is re-recorded. Telegram and mobile WebViews keep
+// the old file for the same URL, which can leave a single call playing stale
+// or wrong audio even after the clip is replaced.
+const CLIP_VERSION = '20261118';
+
 function clipUrl(name) {
-  return `${CLIP_BASE}/${name}.mp3`;
+  return `${CLIP_BASE}/${name}.mp3?v=${CLIP_VERSION}`;
 }
 
 /** Cached <audio> element so a repeated call replays instantly. */

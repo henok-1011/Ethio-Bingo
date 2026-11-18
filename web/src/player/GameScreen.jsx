@@ -331,6 +331,30 @@ export default function GameScreen({
             </div>
           </div>
 
+          {game?.players?.length ? (
+            <div className="table-players">
+              <div className="picker-head">
+                <h4>በዚህ ዙር የሚጫወቱ</h4>
+                <span>{game.playersCount} ካርድ</span>
+              </div>
+              <div className="table-player-list" role="list">
+                {game.players.map((entry) => {
+                  const mine = entry.playerId === you?.playerId;
+                  return (
+                    <span
+                      key={`${entry.playerId}-${entry.cardNumber}`}
+                      role="listitem"
+                      className={`table-player ${mine ? 'mine' : ''}`}
+                    >
+                      <b>#{entry.cardNumber}</b> {entry.name}
+                      {mine ? ' · እርስዎ' : ''}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           {windowOpen ? (
             <div className="card-picker-wrap">
               <div className="picker-head">

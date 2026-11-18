@@ -196,7 +196,7 @@ export default function GameControl({ token }) {
               <div>
                 <span className="muted small">Players</span>
                 <strong>
-                  {game.playersCount} ({game.realCount} real)
+                  {game.playersCount} cards · {game.realCount} real
                 </strong>
               </div>
               <div>
@@ -261,7 +261,7 @@ export default function GameControl({ token }) {
                 <input type="number" min="1" value={form.stake} onChange={set('stake')} />
               </label>
               <label className="field">
-                <span>Bots per round (0–50)</span>
+                <span>Auto table baseline (0 = no bots)</span>
                 <input type="number" min="0" max="50" value={form.botCount} onChange={set('botCount')} />
               </label>
             </div>
@@ -319,6 +319,9 @@ export default function GameControl({ token }) {
             <button type="submit" className="btn primary" disabled={saving}>
               {saving ? 'Saving…' : 'Save game settings'}
             </button>
+            <p className="fine-print">
+              Table size changes every round. Real cards replace bots one-for-one while players are buying.
+            </p>
           </form>
         </section>
 

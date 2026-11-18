@@ -51,6 +51,40 @@ function randomPhone() {
   return `+2519${Math.floor(10_000_000 + Math.random() * 89_999_999)}`;
 }
 
+/**
+ * How many card seats this round should show. botCount is the admin baseline;
+ * the table size changes every round and real card purchases replace bots
+ * one-for-one while the round is waiting.
+ */
+function seatTargetFor(settings) {
+  const base = Math.max(0, Math.min(50, Math.floor(Number(settings.botCount) || 0)));
+  if (base <= 0) return 0;
+  const min = Math.max(4, base - 2);
+  const max = Math.max(min, Math.min(40, base + 8));
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+/** Drops bots so every real card bought takes one seat at the table. */
+function removeBotsForRealCards(round, count) {
+  if (!round.seatTarget || count <= 0) return [];
+  const bots = round.players.filter((p) => p.isBot && !p.forced);
+  const currentBots = round.players.filter((p) => p.isBot).length;
+  const room = Math.max(0, currentBots - round.botFloor);
+  const removeCount = Math.min(count, room, bots.length);
+  const removed = [];
+  for (let i = 0; i < removeCount; i += 1) {
+    const bot = bots.splice(Math.floor(Math.random() * bots.length), 1)[0];
+    const index = round.players.indexOf(bot);
+    if (index >= 0) round.players.splice(index, 1);
+    for (const slot of bot.slots || []) {
+      if (round.taken.get(slot) === bot.id) round.taken.delete(slot);
+    }
+    removed.push(bot.id);
+  }
+  if (removed.length) round.removedBotIds.push(...removed);
+  return removed;
+}
+
 /** Public winner phone format: +251*****9780 (only the last four digits are visible). */
 export function maskPhone(value) {
   return `+251*****${phone4From(value)}`;
@@ -87,15 +121,28 @@ function playerHasBingo(player, round) {
 export function getPublicState() {
   const round = state.current;
   if (!round) {
-    return { status: 'IDLE', playersCount: 0, realCount: 0, calledNumbers: [], prizePool: 0, stake: 0 };
+    return { status: 'IDLE', playersCount: 0, realCount: 0, players: [], calledNumbers: [], prizePool: 0, stake: 0 };
   }
   const now = Date.now();
+  const cards = [];
+  for (const player of round.players) {
+    const slots = player.slots || [];
+    (player.cards || []).forEach((_card, index) => {
+      cards.push({
+        playerId: player.id,
+        name: player.name,
+        cardNumber: slots[index] || index + 1,
+      });
+    });
+  }
+  cards.sort((a, b) => a.cardNumber - b.cardNumber);
   return {
     id: round.id,
     status: round.status,
     stake: round.stake,
     prizePool: round.prizePool,
-    playersCount: round.players.length,
+    playersCount: cards.length,
+    players: cards,
     calledNumbers: [...round.called],
     lastCalled: round.lastCalled,
     takenCards: [...round.taken.keys()],
@@ -202,8 +249,8 @@ async function createRound() {
   try {
     const settings = getSettings();
     const stake = Math.max(100, Number(settings.stake));
-    const botCount = Math.max(0, Math.min(50, Number(settings.botCount)));
     const forced = await resolveNextWinner();
+    const botCount = Math.max(seatTargetFor(settings), forced?.type === 'bot' ? 1 : 0);
 
     const game = await prisma.game.create({
       data: {
@@ -219,6 +266,9 @@ async function createRound() {
       id: game.id,
       status: 'WAITING',
       stake,
+      seatTarget: botCount,
+      botFloor: botCount > 2 ? Math.max(1, Math.round(botCount * 0.15)) : 0,
+      removedBotIds: [],
       seed: game.id * 2654435761,
       bots: [],
       players: [],
@@ -386,7 +436,9 @@ async function finishRound(triggerPlayer, reason) {
       phone4: phone4From(p.phone),
       phoneMasked: maskPhone(p.phone),
       amount: p.isBot
-        ? pool || Math.floor(displayPool / Math.max(1, winners.length))
+        ? realWinners.length
+          ? share
+          : Math.floor(displayPool / Math.max(1, winners.length))
         : share,
       cardNumber: winning?.cardNumber || 1,
       card: winning?.card || null,
@@ -596,6 +648,18 @@ export async function joinRound(user, selection = []) {
       round.players.push(player);
     }
 
+    // Each real card takes a bot's seat, so the table stays the same size while
+    // real players replace bots instead of piling on top of them.
+    const removedBots = removeBotsForRealCards(round, slots.length);
+    if (removedBots.length) {
+      await prisma.gamePlayer
+        .deleteMany({ where: { id: { in: removedBots } } })
+        .catch((err) => console.error('[engine] bot cleanup failed:', err.message));
+      await prisma.game
+        .update({ where: { id: round.id }, data: { botCount: round.players.filter((p) => p.isBot).length } })
+        .catch(() => {});
+    }
+
     await prisma.transaction.create({
       data: {
         userId: user.id,
@@ -679,6 +743,7 @@ export async function adminRoundDetails() {
   return {
     ...getPublicState(),
     realCount: round.players.filter((p) => !p.isBot).length,
+    realCards: round.players.filter((p) => !p.isBot).reduce((sum, p) => sum + (p.cards?.length || 0), 0),
     bots: round.players.filter((p) => p.isBot).map((p) => ({ id: p.id, name: p.name })),
     forcedWinner: round.forcedWinner,
     calledOrder: [...round.called],
