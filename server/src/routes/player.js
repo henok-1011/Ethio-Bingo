@@ -4,10 +4,11 @@ import { prisma } from '../db.js';
 import { requirePlayer } from '../auth.js';
 import { asyncHandler, AppError } from '../util.js';
 import { getSettings } from '../settings.js';
-import { MAX_CARDS, getStateForUser, joinRound, claimBingo } from '../engine.js';
+import { MAX_CARDS, getStateForUser, joinRound, claimBingo, markNumber, setAutoMark } from '../engine.js';
 import { BANKS, requestWithdrawal, verifyDeposit } from '../wallet.js';
 import { verifyReceiptDeposit } from '../receipt-deposits.js';
 import { setSetting } from '../settings.js';
+import { getDepositAccounts } from '../receipts.js';
 import { referralLinkFor } from './auth.js';
 
 const router = Router();
@@ -51,6 +52,7 @@ router.get(
         role: req.user.role,
         isBanned: req.user.isBanned,
         hasPlayed: req.user.hasPlayed,
+        autoMark: req.user.autoMark !== false,
       },
       agent: agent
         ? {
@@ -60,6 +62,11 @@ router.get(
             commissionBalance: agent.commissionBalance,
           }
         : null,
+      announcement: {
+        text: settings.announcementText || '',
+        imageUrl: settings.announcementImage || null,
+        at: settings.announcementAt || null,
+      },
       pendingWithdrawal,
       pendingDeposits,
       config: {
@@ -69,6 +76,7 @@ router.get(
         platformFeeRate: Number(settings.platformFeeRate),
         voiceEnabled: Number(settings.voiceEnabled) !== 0,
         receiptAllowed: String(settings.receiptAllowed) === '1',
+        depositAccounts: getDepositAccounts(),
         receiptVerification: String(settings.receiptAllowed) === '1',
         smsEnabled: String(settings.smsAllowed) === '1',
         banks: BANKS,
@@ -94,6 +102,24 @@ router.post(
   '/game/claim',
   asyncHandler(async (req, res) => {
     const result = await claimBingo(req.user);
+    res.json(result);
+  }),
+);
+
+router.post(
+  '/game/auto-mark',
+  asyncHandler(async (req, res) => {
+    if (typeof req.body?.enabled !== 'boolean') {
+      throw new AppError('Invalid auto-marking setting.', 400);
+    }
+    res.json(await setAutoMark(req.user, req.body.enabled));
+  }),
+);
+
+router.post(
+  '/game/mark',
+  asyncHandler(async (req, res) => {
+    const result = await markNumber(req.user, req.body?.cardIndex, req.body?.number);
     res.json(result);
   }),
 );

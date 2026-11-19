@@ -8,7 +8,7 @@ import { requireStaff } from '../auth.js';
 import { asyncHandler, AppError } from '../util.js';
 import { adminOverview, exportCsv, phoneStatusWhere } from '../analytics.js';
 import { getSettings, updateSettings } from '../settings.js';
-import { adminRoundDetails, startRoundNow } from '../engine.js';
+import { adminRoundDetails, applyWinnerToCurrentRound, clearWinnerOverride, startRoundNow } from '../engine.js';
 import {
   adjustBalance,
   approveAgentWithdrawal,
@@ -20,6 +20,7 @@ import {
 } from '../wallet.js';
 import { setSetting } from '../settings.js';
 import { broadcastTelegram, requestPhoneFromUser } from '../telegram.js';
+import { broadcast } from '../realtime.js';
 import { uniqueReferralCode } from '../agents.js';
 import { referralLinkFor } from './auth.js';
 import { VOICE_DIR } from '../paths.js';
@@ -534,35 +535,39 @@ router.post(
   asyncHandler(async (req, res) => {
     const type = String(req.body?.type || 'none');
     if (type === 'none') {
-      await setSetting('nextWinner', 'none');
+      await clearWinnerOverride();
       await prisma.adminAction.create({
         data: { staffId: req.staff.sid, actionType: 'winner_override_clear', details: 'cleared' },
       });
-      return res.json({ ok: true, nextWinner: null });
+      return res.json({ ok: true, nextWinner: null, scope: null });
     }
+
+    let override;
     if (type === 'bot') {
       const name = String(req.body?.name || 'Lucky Bot').slice(0, 40);
-      await setSetting('nextWinner', JSON.stringify({ type: 'bot', name }));
-      await prisma.adminAction.create({
-        data: { staffId: req.staff.sid, actionType: 'winner_override_set', details: `bot:${name}` },
-      });
-      return res.json({ ok: true, nextWinner: { type: 'bot', name } });
-    }
-    if (type === 'user') {
+      override = { type: 'bot', name };
+    } else if (type === 'user') {
       const userId = Number(req.body?.userId);
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) throw new AppError('Choose a valid player.');
       if (user.isBanned) throw new AppError('This user is banned.');
-      await setSetting(
-        'nextWinner',
-        JSON.stringify({ type: 'user', userId, name: user.firstName || user.username || `User ${user.id}` }),
-      );
-      await prisma.adminAction.create({
-        data: { staffId: req.staff.sid, actionType: 'winner_override_set', details: `user:${userId}` },
-      });
-      return res.json({ ok: true, nextWinner: { type: 'user', userId, name: user.firstName } });
+      override = { type: 'user', userId, name: user.firstName || user.username || `User ${user.id}` };
+    } else {
+      throw new AppError('Invalid winner override type.');
     }
-    throw new AppError('Invalid winner override type.');
+
+    const appliedTo = await applyWinnerToCurrentRound(override);
+    const scope = appliedTo || 'next';
+    if (!appliedTo) await setSetting('nextWinner', JSON.stringify(override));
+
+    await prisma.adminAction.create({
+      data: {
+        staffId: req.staff.sid,
+        actionType: 'winner_override_set',
+        details: `${override.type}:${override.userId || override.name} scope:${scope}`,
+      },
+    });
+    return res.json({ ok: true, nextWinner: override, scope });
   }),
 );
 
@@ -610,7 +615,15 @@ router.post(
     if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
       throw new AppError('Image URL must start with http:// or https://.');
     }
-    res.json(await broadcastTelegram(text, req.staff.sid, imageUrl || null));
+    const result = await broadcastTelegram(text, req.staff.sid, imageUrl || null);
+    const at = new Date().toISOString();
+    await updateSettings(
+      { announcementText: text, announcementImage: imageUrl || '', announcementAt: at },
+      req.staff.sid,
+    );
+    const announcement = { text, imageUrl: imageUrl || null, at };
+    broadcast('announcement', announcement);
+    res.json({ ...result, announcement });
   }),
 );
 

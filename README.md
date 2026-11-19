@@ -73,12 +73,12 @@ npm start          # http://localhost:4000
 │   │   ├── startup.mjs           # container boot: migrate -> seed -> server
 │   │   ├── schema-sqlite.mjs     # generates the SQLite schema used by local dev
 │   │   └── smoke.js              # end-to-end HTTP test (20 checks)
-│   ├── test/payments.test.js     # parser + card/line tests
+│   ├── test/payments.test.js     # parser + card/pattern tests
 │   ├── uploads/                  # uploaded media (served at /uploads)
 │   └── src
 │       ├── index.js              # Express + Socket.IO + static web build
 │       ├── engine.js             # rounds, calling, bots, claims, payouts
-│       ├── bingo.js              # card generation, 12 winning lines
+│       ├── bingo.js              # card generation, pattern validation
 │       ├── wallet.js             # deposits, withdrawals, adjustments, agent payouts
 │       ├── payments.js           # Telebirr / CBE SMS parsers
 │       ├── agents.js             # attribution + commission calculations
@@ -109,15 +109,22 @@ npm start          # http://localhost:4000
 ## 3. Game mechanics
 
 - 5×5 cards, columns **B 1–15, I 16–30, N 31–45, G 46–60, O 61–75**, free center.
-- 12 winning lines (5 rows, 5 columns, 2 diagonals). Cards are auto-marked from the server's called
-  numbers; the player only presses **Bingo!**.
+- A win needs **at least two completed pattern types**. On this 5×5 card: **Diagonal** is both
+  corner-to-corner lines (an X), **Upward** is the bottom-left→top-right diagonal, **Downward** is the
+  top-left→bottom-right diagonal, **Four Corners** is the four corner cells, and **Horizontal** is any
+  completed row. One pattern alone is not enough; the ten possible pairs are the winning combinations.
+  A diagonal already contains the four corners, so corners are not counted a second time when a
+  diagonal is complete.
+- **Auto Marking is per player.** ON marks called numbers on the player's cards automatically;
+  OFF leaves them unmarked until the player taps the matching cell. Only marked cells count toward
+  patterns, and the same two-pattern winner rules apply in both modes.
 - Round lifecycle: `WAITING` (entry window, countdown) → `CALLING` (one number every
   `callIntervalMs`) → `ENDED` (result + next-round countdown).
 - The server owns the shuffled deck, cards, calls and validation. A false claim blocks that player
   for the rest of the round; repeated claims return an error.
-- Payout: real stakes − platform fee = prize pool. All real players holding a complete line when the
-  round ends split the pool equally (cents are floored). A bot may trigger the end of the round, but
-  **bots never receive real money** — only real winners are credited.
+- Payout: real stakes − platform fee = prize pool. All real players with at least two completed
+  patterns when the round ends split the pool equally (cents are floored). A bot may trigger the end
+  of the round, but **bots never receive real money** — only real winners are credited.
 - Bots join each round per admin setting (0–50), with random names and cards. They claim with a
   1.5–4 s human-like delay. With a forced human winner, bots are held until that player claims (or
   the deck runs out).
@@ -125,8 +132,8 @@ npm start          # http://localhost:4000
   and each pick costs 20 ETB (the configured stake), charged immediately and atomically. A number
   can only be bought once per round by anyone, and a player may buy as many numbers as they can
   afford until the window closes.
-- If no real player holds a line, the round ends with no cash payout (stakes remain platform
-  revenue).
+- If no real player has two completed patterns, the round ends with no cash payout (stakes remain
+  platform revenue).
 - All picks are deducted atomically before a card is assigned; if the server restarts mid-round the
   engine **refunds every real stake** from the interrupted round.
 
@@ -138,7 +145,8 @@ Money is stored as **integer santim** (1 ETB = 100 santim) everywhere.
 
 - **Top bar:** balance, Derash points, players, stake per card, current call.
 - **B I N G O master board:** every called number, latest call highlighted.
-- **Cards:** auto-marked, horizontally scrollable for multi-card purchases.
+- **Cards:** Auto Marking ON marks calls automatically; OFF shows the called numbers for manual
+  tapping. Cards are horizontally scrollable for multi-card purchases.
 - **Actions:** pick numbered cards 1–432 (tap = buy that number for 20 ETB), live spent/prize
   estimate before the call, big Bingo! claim button, 30-second selection countdown, winner banner.
 - **Wallet:** available balance, transaction history (with the exact empty state copy), Telebirr and
@@ -229,7 +237,7 @@ referral downline and ledger.
 
 ## 7. Admin panel
 
-- **Overview:** deposits, withdrawals, platform fees, agent commissions, net revenue, prize payouts,
+- **Overview:** deposits, withdrawals, platform revenue, agent commissions, net revenue, prize payouts,
   players, active daily/weekly/monthly, rounds, average stake/players, biggest win, GMV, 14-day line
   and bar charts, money-flow donut, pending queues, CSV exports.
 - **Game control:** live round state (status, players, calls, pool, timer, forced winner, real
@@ -263,6 +271,8 @@ All authenticated routes use `Authorization: Bearer <JWT>`.
 | GET | `/api/game/state` (public state + your cards) |
 | POST | `/api/game/join` `{cards:[1..432]}` (one entry = one 20 ETB pick) |
 | POST | `/api/game/claim` |
+| POST | `/api/game/auto-mark` `{enabled:true|false}` (per-player setting) |
+| POST | `/api/game/mark` `{cardIndex,number}` (manual marking when AUTO is OFF) |
 | GET | `/api/game/history` |
 | GET | `/api/wallet/transactions` · `/wallet/deposits` · `/wallet/withdrawals` |
 | POST | `/api/wallet/deposit/verify-link` `{link}` (Telebirr/CBE receipt link) |
@@ -294,7 +304,7 @@ Auth via `auth.token` (player JWT). Events emitted by the server:
 
 `server/prisma/schema.prisma` defines:
 
-- `User` (telegram id, balance, derash, role, `referredByAgentId`, ban/played flags)
+- `User` (telegram id, balance, derash, role, `referredByAgentId`, ban/played flags, autoMark)
 - `Agent`, `Referral`, `AgentTransaction`, `AgentWithdrawal`, `StaffAccount`
 - `Game`, `GamePlayer` (cards JSON, bot flag, win), `CalledNumber`
 - `Transaction` (deposit/withdrawal/stake/win/refund/adjustment ledger)
@@ -400,8 +410,8 @@ AZURE_SPEECH_KEY=... AZURE_SPEECH_REGION=eastus npm run voice:generate
 
 ## 14. Verification performed
 
-- `npm --workspace server test` — 33/33 (payout split, card/line logic, agent commission rules,
-  receipt-link parsing and review routing).
+- `npm --workspace server test` — 41/41 (payout split, card/pattern logic, auto/manual marking,
+  agent commission rules, receipt-link parsing and review routing).
 - `prisma migrate deploy` against PostgreSQL 16 — fresh database becomes 16 tables, a second run is a
   no-op, and a pre-migration database is detected (`P3005`) with the exact baseline command.
 - `deploy/neon-backup.sh` — dump validated (header check), retention pruning, and a restore into a

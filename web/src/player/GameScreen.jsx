@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { etb, seconds } from '../format.js';
-import { COLUMNS, RANGES, callLabel } from '../bingo.js';
+import { COLUMNS, RANGES, callLabel, winningPatternCells } from '../bingo.js';
 import {
   playCallClip,
   playRemoteCall,
@@ -19,102 +19,128 @@ function countdown(ms) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-const LINES = (() => {
-  const lines = [];
-  for (let row = 0; row < 5; row += 1) {
-    lines.push(Array.from({ length: 5 }, (_, col) => [col, row]));
-  }
-  for (let col = 0; col < 5; col += 1) {
-    lines.push(Array.from({ length: 5 }, (_, row) => [col, row]));
-  }
-  lines.push(Array.from({ length: 5 }, (_, i) => [i, i]));
-  lines.push(Array.from({ length: 5 }, (_, i) => [i, 4 - i]));
-  return lines;
-})();
+const COLUMN_CLASSES = ['b', 'i', 'n', 'g', 'o'];
 
-function lineFor(card, called) {
-  return (
-    LINES.find((line) =>
-      line.every(([col, row]) => {
-        const n = card[col]?.[row];
-        return n === 0 || called.has(n);
-      }),
-    ) || null
-  );
+function joColumnClass(number) {
+  const n = Number(number);
+  if (!Number.isFinite(n) || n < 1 || n > 75) return '';
+  return `jo-col-${COLUMN_CLASSES[Math.floor((n - 1) / 15)]}`;
+}
+
+function winnerBadge(winner) {
+  const phone = winner.phone4 ? ` ( *${winner.phone4})` : '';
+  return `${winner.name || 'Player'}${phone}`;
+}
+
+function useRemainingSeconds(ms) {
+  const [remaining, setRemaining] = useState(() => Math.max(0, Math.ceil(Number(ms || 0) / 1000)));
+
+  useEffect(() => {
+    setRemaining(Math.max(0, Math.ceil(Number(ms || 0) / 1000)));
+  }, [ms]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setRemaining((value) => Math.max(0, value - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return remaining;
 }
 
 function WinnerOverlay({ game, you }) {
   const winners = game?.winners || [];
+  const secondsLeft = useRemainingSeconds(winners.length ? game?.nextRoundInMs : 0);
   if (!winners.length) return null;
 
   const called = new Set(game?.calledNumbers || []);
+  const totalSeconds = Math.max(1, Math.ceil(Number(game?.roundEndDelayMs || 8000) / 1000));
+  const progress = Math.max(0, Math.min(100, (secondsLeft / totalSeconds) * 100));
+  const first = winners[0];
 
   return (
-    <div className="winner-overlay" role="dialog" aria-label="የቢንጎ አሸናፊዎች">
-      <div className="winner-card">
-        <div className="wc-sparkle">🎉</div>
-        <h2 className="wc-title">BINGO</h2>
-        {winners.length > 1 && (
-          <div className="wc-count">{winners.length} አሸናፊዎች በዚህ ዙር</div>
-        )}
+    <div className="winner-overlay" role="dialog" aria-modal="true" aria-label="የቢንጎ አሸናፊዎች">
+      <div className="winner-modal">
+        <div className="winner-modal-content">
+          <header className="winner-head">
+            <h2>BINGO!</h2>
+            <div className="winner-info">
+              {winners.length === 1 ? (
+                <>
+                  <span className="winner-badge">{winnerBadge(first)}</span>
+                  <span>has won the game</span>
+                </>
+              ) : (
+                <span className="winner-count-line">{winners.length} አሸናፊዎች በዚህ ዙር</span>
+              )}
+            </div>
+          </header>
 
-        <div className="wc-winners">
-          {winners.map((winner, index) => {
-            const lineSet = new Set((winner.line || []).map(([col, row]) => `${col}-${row}`));
-            return (
-              <div className="wc-winner" key={`${winner.name}-${winner.phoneMasked || winner.phone4}-${index}`}>
-                {winners.length > 1 && (
-                  <div className="wc-winner-head">
-                    <span className="wc-winner-tag">አሸናፊ {index + 1}</span>
-                  </div>
-                )}
-                <div className="wc-name">{winner.name}</div>
-                {(winner.phoneMasked || winner.phone4) && (
-                  <span className="wc-phone">
-                    {winner.phoneMasked || `+251*****${winner.phone4}`}
-                  </span>
-                )}
+          <div className="winner-cards">
+            {winners.map((winner, index) => {
+              const lineSet = new Set((winner.line || []).map(([col, row]) => `${col}-${row}`));
+              const markedNumbers = new Set(Array.isArray(winner.marked) ? winner.marked : [...called]);
+              return (
+                <article
+                  className="winner-card-shell"
+                  key={`${winner.name}-${winner.phoneMasked || winner.phone4}-${index}`}
+                >
+                  <div className="winner-card-inner">
+                    {winners.length > 1 && (
+                      <div className="winner-card-owner">
+                        <span>አሸናፊ {index + 1}</span>
+                        <strong>{winner.name}</strong>
+                      </div>
+                    )}
 
-                {winner.card ? (
-                  <>
-                    <div className="wc-letters">
+                    <div className="winner-letters">
                       {COLUMNS.map((letter) => (
-                        <span key={letter}>{letter}</span>
+                        <span key={letter} className={`winner-letter lb-${letter.toLowerCase()}`}>
+                          {letter}
+                        </span>
                       ))}
                     </div>
-                    <div className="wc-grid">
+
+                    <div className="winner-grid">
                       {Array.from({ length: 5 }, (_, row) =>
                         COLUMNS.map((_, col) => {
-                          const n = winner.card[col]?.[row];
-                          const marked = n === 0 || called.has(n);
+                          const n = winner.card?.[col]?.[row] ?? 0;
+                          const marked = n === 0 || markedNumbers.has(n);
                           const selected = lineSet.has(`${col}-${row}`);
                           return (
-                            <span
+                            <div
                               key={`${col}-${row}`}
-                              className={`wc-cell ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''}`}
+                              className={`winner-cell ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''}`}
                             >
                               {n === 0 ? 'F' : n}
-                            </span>
+                            </div>
                           );
                         }),
                       )}
                     </div>
-                  </>
-                ) : null}
 
-                <div className="wc-foot">
-                  <span>
-                    ሽልማት <strong>{etb(winner.amount)} ETB</strong>
-                  </span>
-                  <span>ካርድ #{winner.cardNumber}</span>
-                </div>
-              </div>
-            );
-          })}
+                    <div className="winner-card-foot">
+                      <span className="winner-prize">Prize: {etb(winner.amount)} ETB</span>
+                      <span className="winner-card-no">Card# {winner.cardNumber}</span>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          {you?.isWinner && <div className="winner-you">አሸንፈዋል {etb(you.winAmount)} ETB</div>}
+
+          <div className="winner-countdown" aria-live="polite">
+            <div className="winner-countdown-text">
+              <span>{secondsLeft}</span>s
+            </div>
+            <div className="winner-progress">
+              <span style={{ width: `${progress}%` }} />
+            </div>
+          </div>
         </div>
-
-        {you?.isWinner && <div className="wc-you">አሸንፈዋል {etb(you.winAmount)} ETB</div>}
-        <div className="wc-next">ቀጣዩ ዙር በ {countdown(game?.nextRoundInMs)}…</div>
       </div>
     </div>
   );
@@ -132,12 +158,19 @@ export default function GameScreen({
   onToggleVoice,
   voiceAvailable,
   maxCards: maxCardsProp,
+  onRefresh,
+  refreshing,
+  announcement,
+  onMark,
+  onToggleAutoMark,
+  autoMarkBusy,
 }) {
   const maxCards = Math.max(1, Math.min(432, Math.floor(Number(maxCardsProp) || 432)));
   const lastPlayed = useRef(null);
   // Numbers show red the instant they are tapped, before the server confirms the
   // purchase; the entry is dropped again if the join fails.
   const [pendingPicks, setPendingPicks] = useState(() => new Set());
+  const [pendingMarks, setPendingMarks] = useState({});
 
   const called = useMemo(() => new Set(game?.calledNumbers || []), [game?.calledNumbers]);
   const callHistory = useMemo(
@@ -202,8 +235,11 @@ export default function GameScreen({
   const ended = game?.status === 'ENDED';
   const selectionMs = game?.selectionEndsInMs ?? game?.startsInMs ?? 0;
   const windowOpen = isWaiting && selectionMs > 0;
+  const selectionPage = isWaiting && windowOpen;
   const mySlots = you?.slots || [];
   const mySlotSet = new Set(mySlots);
+  const autoMarkOn = you ? you.autoMark !== false : me?.user?.autoMark !== false;
+  const hasPendingMarks = Object.keys(pendingMarks).length > 0;
 
   const pickSlot = async (slot) => {
     if (pendingPicks.has(slot)) return;
@@ -218,260 +254,503 @@ export default function GameScreen({
       });
     }
   };
+  const markCell = async (cardIndex, number) => {
+    if (!onMark) return;
+    const key = `${cardIndex}:${number}`;
+    if (pendingMarks[key]) return;
+    setPendingMarks((prev) => ({ ...prev, [key]: true }));
+    try {
+      await onMark(cardIndex, number);
+    } catch {
+      /* PlayerApp shows the server error toast. */
+    } finally {
+      setPendingMarks((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
   const takenSet = useMemo(() => new Set(game?.takenCards || []), [game?.takenCards]);
   const perCard = game?.stake || stake || 0;
   const spent = you?.spent || 0;
   const feeRate = Math.min(1, Math.max(0, Number(me?.config?.platformFeeRate ?? 0.2)));
-  // The pot is recalculated on every pick: each taken card number adds one
-  // stake and the platform fee is removed. This is the "game money" shown
-  // live while players are selecting numbers.
-  const cardsInRound = game?.takenCards?.length || 0;
-  const livePool = Math.floor(cardsInRound * perCard * (1 - feeRate));
-  // The real pool wins over the bot-inclusive pot, so the advertised prize and
-  // the amount in the winner popup always agree. A round with no real stakes
-  // (bots only) falls back to the pot every card in play forms.
-  const poolDisplay = game?.prizePool || livePool || 0;
+  // Only real stakes fund the pool. Bots occupy seats but never pay or win
+  // money, so their cards must not inflate the displayed pot or prize.
+  const poolDisplay = game?.prizePool || 0;
   const estimatedWin = Math.floor(poolDisplay + perCard * (1 - feeRate));
+  const stakeSantim = game?.stake || stake || 0;
+  const players = Number(game?.playersCount || 0);
+  const derash = Math.max(0, Math.floor(players * stakeSantim * (1 - feeRate)));
+  const calledCount = game?.drawNumber ?? game?.calledNumbers?.length ?? 0;
+  const boardNumbers = Array.from({ length: 15 }, (_, row) =>
+    COLUMNS.map((_, col) => RANGES[col][0] + row),
+  ).flat();
+  const recentSlots = [0, 1, 2].map((index) => callHistory.filter((n) => n !== game?.lastCalled)[index] || null);
+  const timerMs = windowOpen
+    ? selectionMs
+    : isCalling
+      ? game?.nextCallInMs
+      : ended
+        ? game?.nextRoundInMs
+        : 0;
+  const timerLabel = timerMs > 0 ? countdown(timerMs) : '--:--';
+  const statusText = isWaiting
+    ? windowOpen
+      ? `ካርድ ይምረጡ · ${mySlots.length} ተመርጧል · ${etb(spent)} ETB`
+      : 'የመምረጫ ጊዜው አልቋል · ጥሪው ይጀምራል'
+    : isCalling
+      ? `ጥሪ ${calledCount}/75 · ሽልማት ${etb(poolDisplay)} ETB`
+      : ended
+        ? 'ዙሩ ተጠናቅቋል · ቀጣዩ ዙር'
+        : 'መልካም እድል';
+  const gameMessage = you?.hasBingo
+    ? '2 ዝግ ሙሉ ነው። አሁን ቢንጎ ይጠይቁ።'
+    : isWaiting
+      ? `ካርድ ይምረጡ · ${mySlots.length} ተመርጧል · ${etb(spent)} ETB`
+      : isCalling && you
+        ? `መግቢያ ${etb(you.spent || 0)} ETB · ሽልማት ${etb(poolDisplay)} ETB`
+        : isCalling
+          ? 'ይህን ዙር እየተመለከቱ ነው።'
+          : ended
+            ? 'ዙሩ ተጠናቅቋል። ቀጣዩን ይጠብቁ።'
+            : 'መልካም እድል!';
 
   return (
-    <div className="game-screen">
-      <div className="round-strip">
-        {!isWaiting && (
-          <span className={`status-pill ${game?.status?.toLowerCase() || ''}`}>
-            {isCalling ? 'በቀጥታ' : ended ? 'ተጠናቅቋል' : 'በመገናኘት ላይ'}
-          </span>
-        )}
-        <span className="call-count-chip">ጥሪ {game?.drawNumber || 0}/75</span>
-        <span className="game-id-chip">የጨዋታ መለያ #{game?.id ?? '—'}</span>
-        <span className="muted">
-          {you ? `${you.cards?.length > 1 ? 'ካርዶች' : 'ካርድ'} ተገዝቷል` : 'መልካም እድል!'}
-        </span>
-        <span className="voice-actions">
+    <div className={`game-screen jo-game ${selectionPage ? 'selecting' : ''}`}>
+      <div className="jo-app">
+        <header className="jo-header">
+          <div className="jo-title">Ethio Bingo</div>
+          <div className="jo-header-icons">
+            <button
+              type="button"
+              className={`jo-icon ${voiceOn ? 'on' : ''}`}
+              onClick={onToggleVoice}
+              disabled={!voiceAvailable}
+              title="የድምጽ ማስታወቂያ"
+              aria-label="የድምጽ ማስታወቂያ"
+            >
+              {voiceOn ? '🔊' : '🔇'}
+            </button>
+            <button
+              type="button"
+              className="jo-icon"
+              onClick={onRefresh}
+              disabled={refreshing}
+              title="አድስ"
+              aria-label="አድስ"
+            >
+              {refreshing ? '…' : '↻'}
+            </button>
+          </div>
+        </header>
+
+        {announcement?.text ? (
+          <section className="jo-announcement amharic" aria-label="ማስታወቂያ">
+            {announcement.imageUrl ? (
+              <img className="jo-announcement-image" src={announcement.imageUrl} alt="" />
+            ) : null}
+            <div>
+              <strong>ማስታወቂያ</strong>
+              <p>{announcement.text}</p>
+            </div>
+          </section>
+        ) : null}
+
+        <div className="jo-stats">
+          <div className="jo-stat">
+            <span className="jo-stat-label">ደራሽ</span>
+            <strong className="jo-stat-value">
+              {etb(derash)}
+              <br />
+              <small>ETB</small>
+            </strong>
+          </div>
+          <div className="jo-stat">
+            <span className="jo-stat-label">ተጫዋቾች</span>
+            <strong className="jo-stat-value">{players}</strong>
+          </div>
+          <div className="jo-stat">
+            <span className="jo-stat-label">መግቢያ</span>
+            <strong className="jo-stat-value">
+              {etb(stakeSantim)}
+              <br />
+              <small>ETB</small>
+            </strong>
+          </div>
+          <div className="jo-stat">
+            <span className="jo-stat-label">ጥሪ</span>
+            <strong className="jo-stat-value">{calledCount}/75</strong>
+          </div>
           <button
             type="button"
-            className="icon-voice"
-            onClick={onToggleVoice}
-            disabled={!voiceAvailable}
-            title="የድምጽ ማስታወቂያ"
+            className="jo-refresh"
+            onClick={onRefresh}
+            disabled={refreshing}
+            aria-label="አድስ"
+            title="አድስ"
           >
-            {voiceOn ? '🔊' : '🔇'}
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
           </button>
-        </span>
-      </div>
+        </div>
 
-      {!windowOpen && (
-      <div className="board-wrap">
-        <section className="master-board" aria-label="የቢንጎ ሰሌዳ">
-          {COLUMNS.map((letter, colIndex) => (
-            <div className="board-col" key={letter}>
-              <div className="board-head">{letter}</div>
-              {Array.from({ length: 15 }, (_, i) => {
-                const n = RANGES[colIndex][0] + i;
+        <div className="jo-main">
+          <section className="jo-card" aria-label="የቢንጎ ሰሌዳ">
+            <div className="jo-headers">
+              {COLUMNS.map((letter) => (
+                <div key={letter} className={`jo-head ${letter.toLowerCase()}`}>
+                  {letter}
+                </div>
+              ))}
+            </div>
+            <div className="jo-grid">
+              {boardNumbers.map((n) => {
                 const isCalled = called.has(n);
+                const isCurrent = game?.lastCalled === n;
                 return (
                   <div
                     key={n}
-                    className={`board-num ${isCalled ? 'called' : ''} ${game?.lastCalled === n ? 'current' : ''}`}
+                    className={`jo-cell ${joColumnClass(n)} ${isCalled ? 'called' : ''} ${isCurrent ? 'current' : ''}`}
                   >
                     {n}
                   </div>
                 );
               })}
             </div>
-          ))}
-        </section>
+          </section>
 
-        <aside className="call-rail" aria-label="የቅርብ ጥሪዎች">
-          <span className="call-rail-title">ጥሪዎች</span>
-          {callHistory.length ? (
-            callHistory.map((n) => (
-              <span
-                key={n}
-                className={`call-chip ${game?.lastCalled === n ? 'current' : ''}`}
-              >
-                {callLabel(n)}
-              </span>
-            ))
-          ) : (
-            <span className="call-chip idle">--</span>
-          )}
-        </aside>
-      </div>
-      )}
-
-      {isWaiting && (
-        <div className="join-panel">
-          <div className="join-head">
-            <div>
-              <h2>
-                {windowOpen
-                  ? `የመምረጫ ጊዜ በ ${countdown(selectionMs)}`
-                  : 'የመምረጫ ጊዜው አልቋል — ጥሪው ይጀምራል'
-                }
-              </h2>
-            </div>
-            <div className="pool-badge">
-              <span>የሽልማት ገንዘብ</span>
-              <strong>{etb(poolDisplay)} ETB</strong>
-            </div>
-          </div>
-
-          <div className="picks-summary">
-            <div>
-              <span>የመረጡት</span>
-              <strong>{mySlots.length}</strong>
-            </div>
-            <div>
-              <span>የወጣ</span>
-              <strong>{etb(spent)} ETB</strong>
-            </div>
-            <div className="win">
-              <span>የሚገመት ሽልማት</span>
-              <strong>{etb(estimatedWin)} ETB</strong>
-            </div>
-          </div>
-
-          {game?.players?.length ? (
-            <div className="table-players">
-              <div className="picker-head">
-                <h4>በዚህ ዙር የሚጫወቱ</h4>
-                <span>{game.playersCount} ካርድ</span>
-              </div>
-              <div className="table-player-list" role="list">
-                {game.players.map((entry) => {
-                  const mine = entry.playerId === you?.playerId;
-                  return (
-                    <span
-                      key={`${entry.playerId}-${entry.cardNumber}`}
-                      role="listitem"
-                      className={`table-player ${mine ? 'mine' : ''}`}
-                    >
-                      <b>#{entry.cardNumber}</b> {entry.name}
-                      {mine ? ' · እርስዎ' : ''}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {windowOpen ? (
-            <div className="card-picker-wrap">
-              <div className="picker-head">
-                <h4>የካርድ ቁጥር ይምረጡ</h4>
-                {mySlots.length ? <span>{mySlots.length} ተመርጠዋል</span> : null}
-              </div>
-              <div className="card-picker" role="group" aria-label="የካርድ ቁጥሮች 1 እስከ 432">
-                {Array.from({ length: maxCards }, (_, i) => i + 1).map((slot) => {
-                  const mine = mySlotSet.has(slot) || pendingPicks.has(slot);
-                  const taken = takenSet.has(slot) && !mine;
-                  return (
-                    <button
-                      key={slot}
-                      type="button"
-                      className={`pick-cell ${mine ? 'mine' : ''} ${taken ? 'taken' : ''}`}
-                      disabled={taken || busy}
-                      onClick={() => pickSlot(slot)}
-                      aria-label={taken ? `ካርድ ${slot} ተመርጧል` : `ካርድ ${slot} ይግዙ`}
-                    >
-                      {slot}
-                    </button>
-                  );
-                })}
-              </div>
-              {you && (
-                <div className="waiting-note amharic">
-                  <span className="pulse-dot" /> ተቀላቅለዋል። ተጨማሪ ካርድ መምረጥ ይችላሉ — ጊዜው እስኪያልቅ።
+          <section className="jo-game-area">
+            <div className="jo-recent" aria-label="የቅርብ ጥሪዎች">
+              {recentSlots.map((n, index) => (
+                <div
+                  key={`${n || 'empty'}-${index}`}
+                  className={`jo-ball ${n ? joColumnClass(n) : 'empty'}`}
+                >
+                  {n ? callLabel(n) : '--'}
                 </div>
-              )}
+              ))}
             </div>
-          ) : (
-            <div className="waiting-note amharic">
-              <span className="pulse-dot" /> የመምረጫ ጊዜው አልቋል። ካርዶችዎ ከዚህ በታች ይታያሉ — ጥሪው ይጀምራል።
-            </div>
-          )}
-        </div>
-      )}
 
-      {isCalling && (
-        <div className="action-panel">
-          {you ? (
-            <>
+            <div className="jo-current-wrap">
+              <div className={`jo-current ${joColumnClass(game?.lastCalled)} ${game?.lastCalled ? '' : 'idle'}`}>
+                {game?.lastCalled ? callLabel(game.lastCalled) : '--'}
+              </div>
+            </div>
+
+            <div className="jo-auto">
+              <span className="jo-auto-label">AUTO MARK</span>
               <button
                 type="button"
-                className={`btn bingo-btn ${you.hasBingo ? 'ready' : ''}`}
-                disabled={busy || you.blocked}
-                onClick={onClaim}
+                className={`jo-switch ${autoMarkOn ? 'on' : ''}`}
+                onClick={() => onToggleAutoMark?.(!autoMarkOn)}
+                disabled={Boolean(autoMarkBusy) || !onToggleAutoMark}
+                aria-label="Auto Marking"
+                aria-pressed={autoMarkOn}
+                title={autoMarkOn ? 'Auto Marking ON' : 'Auto Marking OFF'}
               >
-                {you.blocked ? 'ተከልክለዋል' : you.hasBingo ? 'ቢንጎ! አሁን ይጠይቁ' : 'ቢንጎ!'}
+                <span />
               </button>
-              <div className="call-timer amharic">
-                ቀጣዩ ቁጥር በ <strong>{seconds(game?.nextCallInMs)} ሰከንድ</strong>
-                <span className="bingo-hint">
-                  መግቢያ {etb(you.spent || 0)} ETB · ሽልማት {etb(poolDisplay)} ETB
-                </span>
-                {you.hasBingo && <span className="bingo-hint">መስመር ሙሉ ነው — ይጠይቁ!</span>}
-                {you.blocked && <span className="blocked-hint">የተሳሳተ ጥያቄ። በዚህ ዙር ማመልከት አይችሉም።</span>}
-              </div>
-            </>
-          ) : (
-            <div className="waiting-note amharic">
-              ይህ ዙር በቀጥታ እየተካሄደ ነው። ለቀጣዩ ዙር ይዘጋጁ፡፡
             </div>
+
+            <div className="jo-text amharic">{gameMessage}</div>
+          </section>
+        </div>
+
+        {selectionPage && (
+          <section className="jo-select" aria-label="የካርድ መምረጫ">
+            <div className="jo-select-top">
+              <button
+                type="button"
+                className="jo-select-refresh"
+                onClick={onRefresh}
+                disabled={refreshing}
+              >
+                {refreshing ? '…' : 'REFRESH'}
+              </button>
+              <div className="jo-select-balance">
+                <span>BALANCE</span>
+                <strong>{etb(me?.user?.balance)} ETB</strong>
+              </div>
+              <div className="jo-select-ad" aria-hidden="true">
+                <span>🔥 JACKPOT! 🔥</span>
+              </div>
+            </div>
+
+            <div className="jo-select-bar">
+              <span className="jo-select-connected">
+                <i /> CONNECTED
+              </span>
+              <span className="jo-select-timer">⏱ {seconds(selectionMs)}s</span>
+              <span className="jo-select-stake">
+                Stake: <b>{etb(perCard)} ETB</b>
+              </span>
+            </div>
+
+            <div className="jo-select-win">Win: {etb(estimatedWin)} ETB</div>
+
+            <div className="jo-select-head">
+              <div>
+                <h4>SELECT YOUR CARD</h4>
+                <span>
+                  {mySlots.length} picked · {etb(spent)} ETB
+                </span>
+              </div>
+              <span className="jo-select-count">{game?.playersCount || 0} cards in play</span>
+            </div>
+
+            <div className="jo-select-grid" role="group" aria-label="የካርድ ቁጥሮች 1 እስከ 432">
+              {Array.from({ length: maxCards }, (_, i) => i + 1).map((slot) => {
+                const mine = mySlotSet.has(slot) || pendingPicks.has(slot);
+                const taken = takenSet.has(slot) && !mine;
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    className={`pick-cell ${mine ? 'mine' : ''} ${taken ? 'taken' : ''}`}
+                    disabled={taken || mine || busy}
+                    onClick={() => pickSlot(slot)}
+                    title={
+                      mine
+                        ? `ካርድ ${slot} የእርስዎ ነው`
+                        : taken
+                          ? `ካርድ ${slot} በሌላ ተጫዋች ተመርጧል`
+                          : `ካርድ ${slot} ይግዙ`
+                    }
+                    aria-label={
+                      mine
+                        ? `ካርድ ${slot} ተመርጧል`
+                        : taken
+                          ? `ካርድ ${slot} በሌላ ተጫዋች ተመርጧል`
+                          : `ካርድ ${slot} ይግዙ`
+                    }
+                  >
+                    {slot}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="jo-select-legend" aria-hidden="true">
+              <span>
+                <i className="yours" /> የእርስዎ
+              </span>
+              <span>
+                <i className="locked" /> የተያዘ
+              </span>
+              <span>
+                <i className="open" /> ነጻ
+              </span>
+            </div>
+
+            <div className="jo-select-note amharic">
+              {you
+                ? 'ተቀላቅለዋል። ተጨማሪ ካርድ መምረጥ ይችላሉ — ጊዜው እስኪያልቅ።'
+                : 'ካርድ ለመግዛት ቁጥር ይንኩ። የሌላ ተጫዋች የተመረጠ ካርድ አይነካም።'}
+            </div>
+          </section>
+        )}
+
+        {isWaiting && !selectionPage && (
+          <section className="jo-panel">
+            <div className="jo-panel-head">
+              <h4>
+                {windowOpen
+                  ? `የመምረጫ ጊዜ በ ${countdown(selectionMs)}`
+                  : 'የመምረጫ ጊዜው አልቋል'}
+              </h4>
+              <span>{game?.playersCount || 0} ካርድ</span>
+            </div>
+
+            <div className="picks-summary">
+              <div>
+                <span>የመረጡት</span>
+                <strong>{mySlots.length}</strong>
+              </div>
+              <div>
+                <span>የወጣ</span>
+                <strong>{etb(spent)} ETB</strong>
+              </div>
+              <div className="win">
+                <span>የሚገመት ሽልማት</span>
+                <strong>{etb(estimatedWin)} ETB</strong>
+              </div>
+            </div>
+
+            {game?.players?.length ? (
+              <div className="table-players">
+                <div className="picker-head">
+                  <h4>በዚህ ዙር የሚጫወቱ</h4>
+                  <span>{game.playersCount} ካርድ</span>
+                </div>
+                <div className="table-player-list" role="list">
+                  {game.players.map((entry) => {
+                    const mine = entry.playerId === you?.playerId;
+                    return (
+                      <span
+                        key={`${entry.playerId}-${entry.cardNumber}`}
+                        role="listitem"
+                        className={`table-player ${mine ? 'mine' : ''}`}
+                      >
+                        <b>#{entry.cardNumber}</b> {entry.name}
+                        {mine ? ' · እርስዎ' : ''}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {windowOpen ? (
+              <div className="card-picker-wrap">
+                <div className="picker-head">
+                  <h4>የካርድ ቁጥር ይምረጡ</h4>
+                  {mySlots.length ? <span>{mySlots.length} ተመርጠዋል</span> : null}
+                </div>
+                <div className="card-picker" role="group" aria-label="የካርድ ቁጥሮች 1 እስከ 432">
+                  {Array.from({ length: maxCards }, (_, i) => i + 1).map((slot) => {
+                    const mine = mySlotSet.has(slot) || pendingPicks.has(slot);
+                    const taken = takenSet.has(slot) && !mine;
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        className={`pick-cell ${mine ? 'mine' : ''} ${taken ? 'taken' : ''}`}
+                        disabled={taken || busy}
+                        onClick={() => pickSlot(slot)}
+                        aria-label={taken ? `ካርድ ${slot} ተመርጧል` : `ካርድ ${slot} ይግዙ`}
+                      >
+                        {slot}
+                      </button>
+                    );
+                  })}
+                </div>
+                {you && (
+                  <div className="waiting-note amharic">
+                    <span className="pulse-dot" /> ተቀላቅለዋል። ተጨማሪ ካርድ መምረጥ
+                    ይችላሉ — ጊዜው እስኪያልቅ።
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="waiting-note amharic">
+                <span className="pulse-dot" /> የመምረጫ ጊዜው አልቋል። ካርዶችዎ ከዚህ
+                በታች ይታያሉ — ጥሪው ይጀምራል።
+              </div>
+            )}
+          </section>
+        )}
+
+        {you?.cards?.length > 0 && !windowOpen && (
+          <section className="my-cards jo-cards">
+            <div className="section-title">
+              <h3>የእኔ {you.cards.length > 1 ? 'ካርዶች' : 'ካርድ'}</h3>
+              <span className="muted amharic">
+                {you.hasBingo
+                  ? '2 ዝግ ተሞልቷል!'
+                  : autoMarkOn
+                    ? 'ራስ-ሰር ምልክት'
+                    : 'በእጅ ምልክት'}
+              </span>
+            </div>
+            <div className="card-scroll">
+              {you.cards.map((card, index) => {
+                const markedNumbers = new Set(you.marked?.[index] || []);
+                for (const key of Object.keys(pendingMarks)) {
+                  const [pendingCard, pendingNumber] = key.split(':').map(Number);
+                  if (pendingCard === index) markedNumbers.add(pendingNumber);
+                }
+                const winLine = winningPatternCells(card, markedNumbers);
+                const winSet = new Set((winLine || []).map(([col, row]) => `${col}-${row}`));
+                return (
+                  <div className={`bingo-card ${winLine ? 'winning' : ''}`} key={index}>
+                    <div className="bingo-card-head">
+                      {COLUMNS.map((letter) => (
+                        <span key={letter} className={`jo-col-${letter.toLowerCase()}`}>
+                          {letter}
+                        </span>
+                      ))}
+                    </div>
+                    {Array.from({ length: 5 }, (_, row) => (
+                      <div className="bingo-card-row" key={row}>
+                        {COLUMNS.map((_, col) => {
+                          const n = card[col][row];
+                          const marked = n === 0 || markedNumbers.has(n);
+                          const selected = winSet.has(`${col}-${row}`);
+                          const canMark =
+                            !autoMarkOn && isCalling && n > 0 && called.has(n) && !marked;
+                          return (
+                            <button
+                              key={col}
+                              type="button"
+                              className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''} ${canMark ? 'available' : ''}`}
+                              disabled={!canMark}
+                              onClick={() => markCell(index, n)}
+                              aria-label={
+                                n === 0
+                                  ? 'ነጻ ማዕከል'
+                                  : canMark
+                                    ? `ቁጥር ${n} ምልክት ያድርጉ`
+                                    : `ቁጥር ${n}`
+                              }
+                            >
+                              {n === 0 ? 'F' : n}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                    <div className="bingo-card-foot">
+                      <span>ካርድ #{you.slots?.[index] ?? index + 1}</span>
+                      <span className="card-win">ሽልማት {etb(poolDisplay)} ETB</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!autoMarkOn && isCalling ? (
+              <p className="jo-manual-note amharic">
+                Auto Marking OFF — የተጠራውን ቁጥር በካርድዎ ላይ ይንኩ።
+              </p>
+            ) : null}
+          </section>
+        )}
+
+        {!you && isCalling && (
+          <div className="jo-spectator amharic">
+            ይህን ዙር እየተመለከቱ ነው። ቀጣዩ ዙር በራሱ ይከፈታል።
+          </div>
+        )}
+
+        <div className="jo-bottom">
+          <div className="jo-timer">{timerLabel}</div>
+          <div className="jo-status">{statusText}</div>
+          {isCalling && you ? (
+            <button
+              type="button"
+              className={`jo-cta ${you.hasBingo ? 'ready' : ''}`}
+              disabled={busy || you.blocked || hasPendingMarks || autoMarkBusy}
+              onClick={onClaim}
+            >
+              {you.blocked ? 'ተከልክለዋል' : you.hasBingo ? 'BINGO! አሁን ይጠይቁ' : 'BINGO!'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="jo-cta refresh"
+              onClick={onRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? '…' : 'REFRESH'}
+            </button>
           )}
         </div>
-      )}
 
-      {you?.cards?.length > 0 && !windowOpen && (
-        <section className="my-cards">
-          <div className="section-title">
-            <h3>የእኔ {you.cards.length > 1 ? 'ካርዶች' : 'ካርድ'}</h3>
-            <span className="muted amharic">{you.hasBingo ? 'መስመር ተሞልቷል!' : 'ራስ-ሰር ምልክት በርቷል'}</span>
-          </div>
-          <div className="card-scroll">
-            {you.cards.map((card, index) => {
-              const winLine = lineFor(card, called);
-              const winSet = new Set((winLine || []).map(([col, row]) => `${col}-${row}`));
-              return (
-                <div className={`bingo-card ${winLine ? 'winning' : ''}`} key={index}>
-                  <div className="bingo-card-head">
-                    {COLUMNS.map((letter) => (
-                      <span key={letter}>{letter}</span>
-                    ))}
-                  </div>
-                  {Array.from({ length: 5 }, (_, row) => (
-                    <div className="bingo-card-row" key={row}>
-                      {COLUMNS.map((_, col) => {
-                        const n = card[col][row];
-                        const marked = n === 0 || called.has(n);
-                        const selected = winSet.has(`${col}-${row}`);
-                        return (
-                          <span
-                            key={col}
-                            className={`bingo-cell ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''}`}
-                          >
-                            {n === 0 ? 'F' : n}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  ))}
-                  <div className="bingo-card-foot">
-                    <span>ካርድ #{you.slots?.[index] ?? index + 1}</span>
-                    <span className="card-win">ሽልማት {etb(poolDisplay)} ETB</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {!you && isCalling && (
-        <section className="spectator">
-          <p className="amharic">ይህን ዙር እየተመለከቱ ነው። ቀጣዩ ዙር በራሱ ይከፈታል።</p>
-        </section>
-      )}
+        <div className="jo-footer">Ethio Bingo · መልካም እድል</div>
+      </div>
 
       {ended && <WinnerOverlay game={game} you={you} />}
     </div>

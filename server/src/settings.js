@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS = {
   agentGameplayCommissionRate: '0.05', // 5% of platform fee from referred users
   agentMinWithdraw: '5000', // 50 ETB
   nextWinner: 'none', // JSON override applied to the next round
+  announcementText: '', // latest in-app announcement shown to players
+  announcementImage: '',
+  announcementAt: '',
   receiptAllowed: '1', // players may verify Telebirr / CBE receipt links
   smsAllowed: '0', // legacy SMS deposit parsing, off by default
 };

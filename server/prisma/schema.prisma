@@ -25,6 +25,7 @@ model User {
   referredByAgent   Agent?             @relation("AgentReferredUsers", fields: [referredByAgentId], references: [id])
   hasPlayed         Boolean            @default(false)
   isBanned          Boolean            @default(false)
+  autoMark          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   agent             Agent?             @relation("AgentAccount")
   transactions      Transaction[]

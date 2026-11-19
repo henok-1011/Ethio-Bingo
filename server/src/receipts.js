@@ -48,6 +48,28 @@ function receivers() {
   };
 }
 
+/**
+ * Payment destination shown to players. Built from the same env value the
+ * verifier compares against, so the number on the deposit screen cannot drift
+ * from the account a receipt must be paid to. Returns null when the operator
+ * has not configured an account (we never advertise the built-in fallback).
+ */
+export function getDepositAccounts() {
+  const publicAccount = (accountKey, nameKey) => {
+    const account = String(process.env[accountKey] || '').trim();
+    if (!account) return null;
+    return {
+      account,
+      name: String(process.env[nameKey] || '').trim() || null,
+    };
+  };
+
+  return {
+    telebirr: publicAccount('DEPOSIT_TELEBIRR_ACCOUNT', 'DEPOSIT_TELEBIRR_NAME'),
+    cbe: publicAccount('DEPOSIT_CBE_ACCOUNT', 'DEPOSIT_CBE_NAME'),
+  };
+}
+
 export class ReceiptError extends AppError {
   constructor(message, code = 'invalid_receipt') {
     super(message, 422);
@@ -375,6 +397,97 @@ function reviewResult(target, reason, parsed = null, link = target.url, retryabl
   };
 }
 
+function receiptApiKey() {
+  return String(process.env.RECEIPT_API_KEY || '').trim();
+}
+
+function receiptApiUrl() {
+  return String(process.env.RECEIPT_API_URL || 'https://links.et/api/verify').trim();
+}
+
+/**
+ * Ask a receipt-verification API (default: links.et) to fetch the receipt
+ * from inside Ethiopia. Telebirr's receipt host answers only Ethiopian IPs,
+ * so a server hosted abroad cannot read it directly. Returns null when the
+ * service is unreachable or misconfigured; the caller then tries a direct
+ * fetch, which works when the server itself is in Ethiopia.
+ */
+async function verifyWithReceiptApi(target, doFetch) {
+  let res;
+  try {
+    res = await doFetch(receiptApiUrl(), {
+      method: 'POST',
+      redirect: 'error',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'x-api-key': receiptApiKey(),
+      },
+      body: JSON.stringify({ url: target.url }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.error('[receipts] verification API unreachable:', err.message);
+    return null;
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    console.error(`[receipts] verification API rejected the key (HTTP ${res.status})`);
+    return null;
+  }
+  if (!res.ok) {
+    console.error(`[receipts] verification API returned HTTP ${res.status}`);
+    return null;
+  }
+
+  let json;
+  try {
+    json = await res.json();
+  } catch {
+    console.error('[receipts] verification API returned non-JSON');
+    return null;
+  }
+
+  if (!json || json.ok === false) {
+    return {
+      needsReview: true,
+      reason: json?.error || 'The verification service could not confirm this receipt.',
+      parsed: json?.receipt ? parseApiReceipt(json, target) : null,
+    };
+  }
+
+  return { parsed: parseApiReceipt(json, target) };
+}
+
+function parseApiReceipt(json, target) {
+  const receipt = json?.receipt && typeof json.receipt === 'object' ? json.receipt : {};
+  const amountRaw = receipt.settledAmount ?? receipt.totalPaidAmount ?? receipt.amount ?? null;
+  const amountSantim = parseAmountSantim(amountRaw);
+  const status = receipt.transactionStatus || receipt.status || 'Completed';
+  const reference = String(receipt.receiptNo || receipt.reference || target.reference || '').trim();
+  const providerKey = String(json?.providerKey || '').toLowerCase();
+  const provider = providerKey.includes('telebirr')
+    ? 'telebirr'
+    : providerKey.includes('cbe')
+      ? (providerKey.includes('birr') ? 'cbebirr' : 'cbe')
+      : target.provider;
+
+  return {
+    provider,
+    reference: reference.toUpperCase(),
+    receiptNo: reference || null,
+    amountSantim,
+    currency: 'ETB',
+    status,
+    ok: statusIsSuccess(status) && amountSantim > 0,
+    payerName: receipt.payerName || null,
+    receiverName: receipt.creditedPartyName || receipt.receiverName || null,
+    receiverAccount: receipt.creditedPartyAccountNo || receipt.receiverAccount || null,
+    paidAt: receipt.paymentDate || receipt.paidAt || null,
+    receiptUrl: target.url,
+  };
+}
+
 export async function verifyReceiptLink(rawInput, options = {}) {
   const link = extractReceiptLink(rawInput);
   const target = classifyReceiptLink(link);
@@ -388,8 +501,21 @@ export async function verifyReceiptLink(rawInput, options = {}) {
   }
 
   try {
-    let parsed;
-    if (target.kind === 'telebirr') {
+    let parsed = null;
+
+    // Telebirr's receipt host answers only Ethiopian IPs, so a server hosted
+    // abroad cannot read the page directly. When a verification API key is
+    // configured, ask that service to fetch it from Ethiopia first; a direct
+    // fetch remains the fallback when the server itself is in Ethiopia.
+    if (receiptApiKey()) {
+      const viaApi = await verifyWithReceiptApi(target, doFetch);
+      if (viaApi?.needsReview) {
+        return reviewResult(target, viaApi.reason, viaApi.parsed, target.url, true);
+      }
+      if (viaApi?.parsed) parsed = viaApi.parsed;
+    }
+
+    if (!parsed && target.kind === 'telebirr') {
       const html = await doFetch(link, {
         redirect: 'error',
         headers: { Accept: 'text/html', 'User-Agent': 'EthioBingo/1.0' },
@@ -401,7 +527,7 @@ export async function verifyReceiptLink(rawInput, options = {}) {
         return text;
       });
       parsed = parseTelebirrReceipt(html, target.reference);
-    } else if (target.kind === 'cbe') {
+    } else if (!parsed && target.kind === 'cbe') {
       const apiUrl =
         target.url.includes('/api/v1/transactions/public/transaction-detail/') &&
         new URL(target.url).hostname === CBE_API_HOST
@@ -428,7 +554,7 @@ export async function verifyReceiptLink(rawInput, options = {}) {
         }
       });
       parsed = parseCbeJson(json, target.reference);
-    } else {
+    } else if (!parsed) {
       const html = await doFetch(link, {
         redirect: 'error',
         headers: { Accept: 'text/html', 'User-Agent': 'EthioBingo/1.0' },

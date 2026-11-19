@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computePayout, totalRealStakes } from '../src/payouts.js';
-import { cardHasBingo, generateCard, hasLine, winningLines } from '../src/bingo.js';
+import { computePayout, settleRound, totalRealStakes } from '../src/payouts.js';
+import {
+  cardHasBingo,
+  completedPatterns,
+  generateCard,
+  hasLine,
+  winningLines,
+  winningPatternCells,
+} from '../src/bingo.js';
 
 test('platform keeps 20% and the pool splits between real winners', () => {
   // 4 real players at 10 ETB: 4000 santim staked, 20% fee, one winner.
@@ -20,6 +27,20 @@ test('bots winning means no payout and the pool stays whole', () => {
   const result = computePayout({ stakes: 4000, platformFeeRate: 0.2, realWinnerCount: 0 });
   assert.equal(result.pool, 3200);
   assert.equal(result.share, 0);
+});
+
+test('a round without a real winner keeps all real stakes as platform revenue', () => {
+  const result = settleRound({ stakes: 4000, platformFeeRate: 0.2, realWinnerCount: 0 });
+  assert.equal(result.pool, 0);
+  assert.equal(result.platformFee, 4000);
+  assert.equal(result.share, 0);
+});
+
+test('a round with real winners settles the normal fee and pool', () => {
+  const result = settleRound({ stakes: 4000, platformFeeRate: 0.2, realWinnerCount: 2 });
+  assert.equal(result.pool, 3200);
+  assert.equal(result.platformFee, 800);
+  assert.equal(result.share, 1600);
 });
 
 test('odd pools round down so the platform never pays more than it took', () => {
@@ -56,9 +77,45 @@ test('a generated card has 12 ways to win and a free centre', () => {
   assert.equal(hasLine(card, called), false);
 });
 
-test('cardHasBingo checks every card the player holds', () => {
+test('a single completed line is not enough to win', () => {
   const card = generateCard();
-  const called = new Set([card[0][4], card[1][4], card[2][4], card[3][4], card[4][4]]);
-  assert.equal(cardHasBingo([generateCard(), card], called), true);
+  const called = new Set(Array.from({ length: 5 }, (_, col) => card[col][0]));
+  assert.deepEqual(completedPatterns(card, called), ['horizontal']);
+  assert.equal(cardHasBingo([card], called), false);
+});
+
+test('two completed patterns win', () => {
+  const card = generateCard();
+  const called = new Set(Array.from({ length: 5 }, (_, col) => card[col][0]));
+  called.add(card[0][4]);
+  called.add(card[4][4]);
+  assert.deepEqual(completedPatterns(card, called).sort(), ['fourCorners', 'horizontal']);
+  assert.equal(cardHasBingo([card], called), true);
   assert.equal(cardHasBingo([], called), false);
+  assert.equal(winningPatternCells(card, called).length, 7);
+});
+
+test('one diagonal is only one pattern', () => {
+  const card = generateCard();
+  const called = new Set();
+  for (let i = 0; i < 5; i += 1) called.add(card[i][i]);
+  called.delete(0);
+  assert.deepEqual(completedPatterns(card, called), ['downward']);
+  assert.equal(cardHasBingo([card], called), false);
+});
+
+test('both diagonals complete diagonal, upward and downward', () => {
+  const card = generateCard();
+  const called = new Set();
+  for (let i = 0; i < 5; i += 1) {
+    called.add(card[i][i]);
+    called.add(card[i][4 - i]);
+  }
+  called.delete(0);
+  const patterns = completedPatterns(card, called);
+  assert.ok(patterns.includes('diagonal'));
+  assert.ok(patterns.includes('upward'));
+  assert.ok(patterns.includes('downward'));
+  assert.equal(patterns.includes('fourCorners'), false);
+  assert.equal(cardHasBingo([card], called), true);
 });

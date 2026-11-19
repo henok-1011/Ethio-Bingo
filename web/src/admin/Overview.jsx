@@ -50,9 +50,14 @@ export default function Overview({ token, onNavigate }) {
       <div className="stat-grid">
         <Stat label="Total deposits" value={money(t.deposits)} hint="Verified player deposits" tone="gold" />
         <Stat label="Total withdrawals" value={money(t.withdrawals)} hint="Approved payouts" />
-        <Stat label="Platform fees" value={money(t.platformFees)} hint="Entry fee margin on real stakes" tone="green" />
+        <Stat
+          label="Platform revenue"
+          value={money(t.platformFees)}
+          hint="Fees plus stakes retained when no real winner"
+          tone="green"
+        />
         <Stat label="Agent commissions" value={money(t.agentCommissions)} hint={`Includes ${money(t.referralBonuses)} referral bonuses`} />
-        <Stat label="Net revenue" value={money(t.netRevenue)} hint="Fees − agent commissions" tone="green" />
+        <Stat label="Net revenue" value={money(t.netRevenue)} hint="Revenue − agent commissions" tone="green" />
         <Stat label="Prize payouts" value={money(t.winPayouts)} hint="Paid to players" />
         <Stat label="Players" value={t.players.toLocaleString()} hint={`+${t.newUsersWeek} this week`} />
         <Stat
@@ -116,7 +121,7 @@ export default function Overview({ token, onNavigate }) {
       </div>
 
       <p className="muted small">
-        All amounts are in ETB. Net revenue deducts agent commissions and referral bonuses from platform fees.
+        All amounts are in ETB. Net revenue deducts agent commissions and referral bonuses from platform revenue.
       </p>
     </div>
   );

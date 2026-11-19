@@ -10,8 +10,18 @@ const TELEBIRR_STEPS = [
   '4የደረሳችሁን የክፍያ ማረጋገጫ (receipt) ሊንክ ሙሉውን ኮፒ(copy) በማድረግ ከታች ባለው Verify Your Payment ማስገቢያ ላይ ፔስት(paste) በማድረግ Verify & add funds ይጫኑ',
 ];
 
+const CBE_STEPS = [
+  '1የ CBE አካውንት',
+  '2ከላይ ባለው የ CBE አካውንት ገንዘቡን ያስገቡ',
+  '3ገንዘቡን ከላካችሁ በኋላ CBE የክፍያ ማረጋገጫ (receipt) ሊንክ ይደርሳችኋል',
+  '4የደረሳችሁን የክፍያ ማረጋገጫ (receipt) ሊንክ ሙሉውን ኮፒ(copy) በማድረግ ከታች ባለው Verify Your Payment ማስገቢያ ላይ ፔስት(paste) በማድረግ Verify & add funds ይጫኑ',
+];
+
 export default function WalletScreen({ me, token, refreshMe }) {
-  const [method, setMethod] = useState('telebirr');
+  const [method, setMethod] = useState(() => {
+    const configured = me?.config?.depositAccounts;
+    return configured?.telebirr ? 'telebirr' : configured?.cbe ? 'cbe' : 'telebirr';
+  });
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
@@ -19,6 +29,40 @@ export default function WalletScreen({ me, token, refreshMe }) {
   const [deposits, setDeposits] = useState([]);
   const [loading, setLoading] = useState(true);
   const toast = useToast();
+  const accounts = me?.config?.depositAccounts || {};
+  const methods = [
+    {
+      id: 'telebirr',
+      label: 'Telebirr',
+      logo: 'T',
+      tag: 'Better Transaction Fee',
+      account: accounts.telebirr,
+      steps: TELEBIRR_STEPS,
+      placeholder: 'https://transactioninfo.ethiotelecom.et/receipt/…',
+      receiptNote: 'Telebirr transaction numbers are also accepted.',
+    },
+    {
+      id: 'cbe',
+      label: 'CBE',
+      logo: 'CBE',
+      tag: 'Commercial Bank of Ethiopia',
+      account: accounts.cbe,
+      steps: CBE_STEPS,
+      placeholder: 'https://mbreciept.cbe.com.et/…',
+      receiptNote: 'CBE app receipt links are accepted; PDF receipts go to manual review.',
+    },
+  ];
+  const active = methods.find((item) => item.id === method) || methods[0];
+  const activeAccount = active.account;
+  const copyAccount = useCallback(async () => {
+    if (!activeAccount?.account) return;
+    try {
+      await navigator.clipboard.writeText(activeAccount.account);
+      toast(active.label + ' account number copied.', 'info');
+    } catch {
+      toast('Could not copy the number — select it manually.', 'error');
+    }
+  }, [activeAccount?.account, active.label, toast]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,7 +117,7 @@ export default function WalletScreen({ me, token, refreshMe }) {
     }
   }
 
-  const steps = TELEBIRR_STEPS;
+  const steps = active.steps;
 
   const hasHistory = transactions.length > 0;
 
@@ -99,20 +143,35 @@ export default function WalletScreen({ me, token, refreshMe }) {
         </div>
 
         <div className="method-cards">
-          <button
-            type="button"
-            className={`method-card ${method === 'telebirr' ? 'active' : ''}`}
-            onClick={() => setMethod('telebirr')}
-          >
-            <span className="method-logo telebirr">T</span>
-            <span className="method-name">Telebirr</span>
-            <span className="method-tag">Better Transaction Fee</span>
-          </button>
+          {methods.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`method-card ${method === item.id ? 'active' : ''}`}
+              onClick={() => setMethod(item.id)}
+            >
+              <span className={`method-logo ${item.id}`}>{item.logo}</span>
+              <span className="method-name">{item.label}</span>
+              <span className="method-tag">{item.tag}</span>
+            </button>
+          ))}
         </div>
 
         <div className="instructions">
           <div className="instructions-head">
-            <h4>Telebirr Payment Instructions</h4>
+            <h4>{active.label} Payment Instructions</h4>
+          </div>
+          <div className="pay-to">
+            <div>
+              <span className="pay-to-label">Send to ({active.label})</span>
+              <strong className="pay-to-account">{activeAccount ? activeAccount.account : 'Not configured'}</strong>
+              {activeAccount?.name ? <span className="pay-to-name">{activeAccount.name}</span> : null}
+            </div>
+            {activeAccount ? (
+              <button type="button" className="copy-btn" onClick={copyAccount}>
+                Copy number
+              </button>
+            ) : null}
           </div>
           {steps.map((step) => (
             <p key={step} className="amharic-step">
@@ -127,23 +186,23 @@ export default function WalletScreen({ me, token, refreshMe }) {
             <span className="badge gold">Receipt Link</span>
           </div>
           <p className="muted small">
-            Paste the receipt link from the Telebirr SMS or app. We open the official receipt and credit the
+            Paste the receipt link from your {active.label} SMS or app. We open the official receipt and credit the
             amount paid to the platform account.
           </p>
           <textarea
             value={link}
             onChange={(event) => setLink(event.target.value)}
             rows={3}
-            placeholder="https://transactioninfo.ethiotelecom.et/receipt/…"
+            placeholder={active.placeholder}
             spellCheck={false}
           />
           <div className="examples">
             <span>Examples:</span>
-            <code>https://transactioninfo.ethiotelecom.et/receipt/CHQ0FJ403O</code>
-            <span className="muted">Telebirr transaction numbers are also accepted.</span>
+            <code>{active.placeholder}</code>
+            <span className="muted">{active.receiptNote}</span>
           </div>
           <p className="fine-print">
-            Verifies official Telebirr receipts against the platform account. If the amount is above the
+            Verifies official {active.label} receipts against the platform account. If the amount is above the
             auto-verify limit, an admin reviews it.
           </p>
           <button type="submit" className="btn primary big" disabled={busy}>

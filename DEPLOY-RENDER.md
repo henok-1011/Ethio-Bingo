@@ -16,6 +16,7 @@ Trade-offs of the free plan (read before you rely on it for real money):
 | 0.1 CPU, 512 MB RAM | Fine for a small room, tight beyond that | Upgrade to Starter ($7) when revenue allows |
 | Ephemeral filesystem | Only admin voice clips are files and are lost on redeploy | Re-upload clips in the admin panel after a deploy |
 | 5 GB bandwidth / month | Enough for gameplay; watch heavy audio | Serve voice clips in compressed format |
+| 100 Neon CU-hours / month | The engine runs rounds 24/7, so the database never scales to zero: at the 0.25 CU minimum that is ~400 h, i.e. ~16 days | Run the keep-alive monitor only during game hours (see step 5) |
 
 The game must run as a **single instance** (rooms and timers live in memory), so do not enable
 autoscaling on any host.
@@ -78,7 +79,7 @@ Wrong values here break Telegram auth and referral links — `DEV_MODE` must sta
 
 ```bash
 curl https://ethio-bingo-xxxx.onrender.com/api/health
-# {"ok":true,"time":"..."}
+# {"ok":true,"db":"up","time":"..."}
 
 cd server
 BASE_URL=https://ethio-bingo-xxxx.onrender.com npm run smoke
@@ -94,8 +95,26 @@ service.
    when the database is down, so the monitor doubles as a database alert).
 3. Do not ping `/`, `/robots.txt` or static files: Render answers those without waking the service.
 
-Budget: 750 h/month against a ~744 h month, so this single service is all you get. A second free
-web service would exhaust the allowance and both would stop before month end.
+Render budget: 750 h/month against a ~744 h month, so this single service is all you get. A second
+free web service would exhaust the allowance and both would stop before month end.
+
+Neon budget — the clock that runs out first: the free plan includes **100 CU-hours per project per
+month**, and 0.25 CU is the smallest compute. That is **~400 hours, about 16 days**, and the engine
+never idles — it creates a round, calls numbers and writes `CalledNumber` rows around the clock, so
+the database never reaches its 5-minute scale-to-zero. Pinging `/api/health` 24/7 therefore
+*guarantees* the database suspends mid-month, and API calls start failing until the month rolls over.
+
+Pick one:
+
+- **Game hours only (recommended, stays free forever).** Set the monitor's schedule to the hours you
+  actually run rounds, e.g. 18:00–24:00. Six hours a day is ~180 h of compute, or ~45 CU-hours/month.
+  Render usage drops the same way (~180 of 750 h). Players outside the window wait ~60 s for a cold
+  start and land in an idle lobby.
+- **24/7.** Works, but plan on upgrading Neon (Launch, ~$0.106/CU-hour) or moving the database onto
+  the Oracle VM from `DEPLOY.md` before day 16.
+
+Whichever you choose, keep the monitor at 5 minutes — the failure mode it prevents (a 60 s cold start
+for every first player) is worse than the hours it costs you.
 
 ## 6. Point Telegram at it
 

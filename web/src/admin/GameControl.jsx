@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { callLabel } from '../bingo.js';
 import { etb, seconds } from '../format.js';
 import { useToast } from '../components/Toast.jsx';
+
+const CARD_COLUMNS = ['B', 'I', 'N', 'G', 'O'];
 
 function toForm(settings) {
   return {
@@ -116,9 +119,14 @@ export default function GameControl({ token }) {
       }
       if (winnerType === 'bot') body.name = botName;
       const result = await api('/api/admin/game/next-winner', { token, method: 'POST', body });
+      const where = result.scope === 'next'
+        ? 'the next round'
+        : result.scope === 'waiting'
+          ? 'the current waiting round'
+          : 'the current calling round';
       toast(
         result.nextWinner
-          ? `Next winner set to ${result.nextWinner.name || result.nextWinner.type}.`
+          ? `Winner override set for ${where}: ${result.nextWinner.name || result.nextWinner.type}.`
           : 'Winner override cleared.',
       );
       await loadSettings();
@@ -163,13 +171,20 @@ export default function GameControl({ token }) {
 
   if (!form) return <div className="panel">Loading settings…</div>;
 
-  const override = (() => {
+  const queuedOverride = (() => {
     try {
       return settings?.nextWinner && settings.nextWinner !== 'none' ? JSON.parse(settings.nextWinner) : null;
     } catch {
       return null;
     }
   })();
+  const override = game?.forcedWinner || queuedOverride;
+  const overrideIsLive = Boolean(game?.forcedWinner);
+
+  const calledSet = new Set(game?.calledNumbers || []);
+  const upcoming = game?.upcomingNumbers || [];
+  const upcomingPreview = upcoming.slice(0, 12);
+  const upcomingSet = new Set(upcomingPreview);
 
   return (
     <div className="game-control">
@@ -242,6 +257,72 @@ export default function GameControl({ token }) {
                 <span className="muted small">No real players in this round.</span>
               )}
             </div>
+
+            <div className="upcoming-calls">
+              <div className="section-title">
+                <h4>Upcoming calls</h4>
+                <span className="muted small">Admin only · next call first</span>
+              </div>
+              <div className="upcoming-call-list">
+                {upcomingPreview.length ? (
+                  upcomingPreview.map((number, index) => (
+                    <span key={number} className={`upcoming-call ${index === 0 ? 'next' : ''}`}>
+                      {callLabel(number)}
+                    </span>
+                  ))
+                ) : (
+                  <span className="muted small">Deck finished</span>
+                )}
+              </div>
+            </div>
+
+            {game.realPlayers?.length ? (
+              <div className="admin-player-cards">
+                <div className="section-title">
+                  <h4>Player cards</h4>
+                  <span className="muted small">Called = gold · next calls = blue</span>
+                </div>
+                {game.realPlayers.map((player) => (
+                  <details className="admin-player-card" key={player.id}>
+                    <summary>
+                      {player.name} · {player.cardCount || 0} card(s)
+                      {player.bingo ? ' · BINGO' : ''}
+                    </summary>
+                    <div className="admin-card-list">
+                      {(player.cards || []).map((card, cardIndex) => (
+                        <div className="admin-card" key={`${player.id}-${cardIndex}`}>
+                          <div className="admin-card-head">
+                            {CARD_COLUMNS.map((letter) => (
+                              <span key={letter}>{letter}</span>
+                            ))}
+                          </div>
+                          {Array.from({ length: 5 }, (_, row) => (
+                            <div className="admin-card-row" key={row}>
+                              {CARD_COLUMNS.map((_, col) => {
+                                const number = card[col]?.[row];
+                                const marked = number === 0 || calledSet.has(number);
+                                const coming = number !== 0 && upcomingSet.has(number);
+                                return (
+                                  <span
+                                    key={col}
+                                    className={`admin-card-cell ${marked ? 'called' : ''} ${coming ? 'coming' : ''} ${number === 0 ? 'free' : ''}`}
+                                  >
+                                    {number === 0 ? 'F' : number}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ))}
+                          <div className="admin-card-foot">
+                            Card #{player.numbers?.[cardIndex] ?? cardIndex + 1}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            ) : null}
           </>
         ) : (
           <p className="muted">No active round.</p>
@@ -381,15 +462,21 @@ export default function GameControl({ token }) {
             <span className="badge danger">Audited</span>
           </div>
           <p className="muted small">
-            Overrides RNG for the next round only. Bots are held back while a human winner is forced. Every override is written
-            to the audit log.
+            Applies to the current waiting round. If the round is already calling, the player must already hold a card
+            in it; otherwise the override waits for the next round. Bots are held back while a human winner is forced.
+            Every override is written to the audit log.
           </p>
           <div className="current-override">
             Current: <strong>{override ? `${override.name} (${override.type})` : 'none'}</strong>
             {override && (
-              <button type="button" className="link-btn" onClick={clearWinner}>
-                clear
-              </button>
+              <>
+                <span className="muted small">
+                  {overrideIsLive ? ' · current round' : ' · queued for the next available round'}
+                </span>
+                <button type="button" className="link-btn" onClick={clearWinner}>
+                  clear
+                </button>
+              </>
             )}
           </div>
           <form className="winner-form" onSubmit={applyWinner}>

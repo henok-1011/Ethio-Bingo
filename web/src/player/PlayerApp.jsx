@@ -21,6 +21,7 @@ export default function PlayerApp() {
   const [you, setYou] = useState(null);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoMarkBusy, setAutoMarkBusy] = useState(false);
   const [view, setView] = useState('game');
   const [authError, setAuthError] = useState('');
   const [voiceOn, setVoiceOn] = useState(() => localStorage.getItem('bingo_voice') !== 'off');
@@ -148,6 +149,9 @@ export default function PlayerApp() {
       }
     });
     socket.on('you', (payload) => setYou(payload));
+    socket.on('announcement', (payload) => {
+      setMe((prev) => (prev ? { ...prev, announcement: payload } : prev));
+    });
     socket.on('balance', () => refreshMe());
     socket.on('game:started', () => {
       toast('ቁጥሮች እየተጠሩ ነው። መልካም እድል!');
@@ -179,6 +183,45 @@ export default function PlayerApp() {
     localStorage.setItem('bingo_voice', next ? 'on' : 'off');
     haptic('light');
   };
+
+  async function toggleAutoMark(next) {
+    if (!token || autoMarkBusy) return;
+    setAutoMarkBusy(true);
+    try {
+      const result = await api('/api/game/auto-mark', {
+        token,
+        method: 'POST',
+        body: { enabled: Boolean(next) },
+      });
+      setMe((prev) =>
+        prev ? { ...prev, user: { ...prev.user, autoMark: result.autoMark !== false } } : prev,
+      );
+      if (result.you) setYou(result.you);
+      haptic('light');
+    } catch (err) {
+      toast(err.message || 'Auto Marking መቀየር አልተቻለም።', 'error');
+      haptic('error');
+    } finally {
+      setAutoMarkBusy(false);
+    }
+  }
+
+  async function markNumber(cardIndex, number) {
+    if (!token) return;
+    try {
+      const result = await api('/api/game/mark', {
+        token,
+        method: 'POST',
+        body: { cardIndex, number },
+      });
+      if (result.you) setYou(result.you);
+      haptic('light');
+    } catch (err) {
+      toast(err.message || 'ቁጥሩን ምልክት ማድረግ አልተቻለም።', 'error');
+      haptic('error');
+      throw err;
+    }
+  }
 
   const refreshGame = useCallback(async () => {
     if (!token || refreshing) return;
@@ -271,19 +314,35 @@ export default function PlayerApp() {
 
   return (
     <div className="player-shell with-nav">
-      <TopBar
-        me={me}
-        game={game}
-        you={you}
-        onRefresh={refreshGame}
-        refreshing={refreshing}
-        view={view}
-        onNavigate={navigate}
-      />
+      {view !== 'game' && (
+        <TopBar
+          me={me}
+          game={game}
+          you={you}
+          onRefresh={refreshGame}
+          refreshing={refreshing}
+          view={view}
+          onNavigate={navigate}
+        />
+      )}
 
       {me.user?.isBanned && (
         <div className="banned-banner amharic">ይህ መለያ ታግዷል። እባክዎ በቴሌግራም ድጋፍን ያግኙ።</div>
       )}
+
+      {view !== 'game' && me.announcement?.text ? (
+        <section className="announcement-banner" aria-label="ማስታወቂያ">
+          {me.announcement.imageUrl ? (
+            <img className="announcement-image" src={me.announcement.imageUrl} alt="" />
+          ) : (
+            <span className="announcement-icon" aria-hidden="true">📣</span>
+          )}
+          <div className="announcement-copy">
+            <strong>ማስታወቂያ</strong>
+            <p>{me.announcement.text}</p>
+          </div>
+        </section>
+      ) : null}
 
       <main className="player-main">
         {view !== 'game' && (
@@ -304,6 +363,12 @@ export default function PlayerApp() {
             onToggleVoice={toggleVoice}
             voiceAvailable={me?.config?.voiceEnabled !== false}
             maxCards={me?.config?.maxCards || 432}
+            onRefresh={refreshGame}
+            refreshing={refreshing}
+            announcement={me.announcement}
+            onMark={markNumber}
+            onToggleAutoMark={toggleAutoMark}
+            autoMarkBusy={autoMarkBusy}
           />
         )}
         {view === 'wallet' && <WalletScreen me={me} token={token} refreshMe={refreshMe} />}

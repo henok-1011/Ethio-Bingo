@@ -1,10 +1,11 @@
 import { prisma } from './db.js';
 import { getSettings, setSetting } from './settings.js';
-import { cardHasBingo, generateCard, hasLine, shuffleDeck, winningLineFor } from './bingo.js';
+import { cardHasBingo, generateCard, shuffleDeck, winningLineFor, winningPatternCells } from './bingo.js';
+import { emptyMarks, markCard, markCalledNumbers, markedSet } from './marking.js';
 import { broadcast, broadcastState, emitToUser } from './realtime.js';
 import { AppError } from './util.js';
 import { onStake } from './agents.js';
-import { computePayout, totalRealStakes } from './payouts.js';
+import { computePayout, settleRound, totalRealStakes } from './payouts.js';
 
 // Cards are numbered 1..432. Every number is a distinct card and a number
 // can only be bought once per round.
@@ -90,15 +91,37 @@ export function maskPhone(value) {
   return `+251*****${phone4From(value)}`;
 }
 
-function winnerCardFor(player, called) {
+function ensureMarks(player) {
+  if (!Array.isArray(player.marks)) player.marks = emptyMarks(player.cards || []);
+  while (player.marks.length < (player.cards?.length || 0)) player.marks.push(new Set());
+  return player.marks;
+}
+
+function winnerCardFor(player) {
   const cards = player.cards || [];
   const slots = player.slots || [];
+  const marks = ensureMarks(player);
   for (let index = 0; index < cards.length; index += 1) {
-    const line = winningLineFor(cards[index], called);
-    if (line) return { card: cards[index], line, cardNumber: slots[index] || index + 1 };
+    // Show every completed pattern. A forced winner with only one pattern
+    // falls back to that line so the result card still has a highlight.
+    const line =
+      winningPatternCells(cards[index], marks[index]) || winningLineFor(cards[index], marks[index]);
+    if (line) {
+      return {
+        card: cards[index],
+        line,
+        marked: [...marks[index]].sort((a, b) => a - b),
+        cardNumber: slots[index] || index + 1,
+      };
+    }
   }
   return cards.length
-    ? { card: cards[0], line: null, cardNumber: slots[0] || 1 }
+    ? {
+        card: cards[0],
+        line: null,
+        marked: [...(marks[0] || [])].sort((a, b) => a - b),
+        cardNumber: slots[0] || 1,
+      }
     : null;
 }
 
@@ -114,8 +137,8 @@ function prizePoolFor(round) {
   }).pool;
 }
 
-function playerHasBingo(player, round) {
-  return cardHasBingo(player.cards, round.called);
+function playerHasBingo(player) {
+  return cardHasBingo(player.cards, markedSet(ensureMarks(player)));
 }
 
 export function getPublicState() {
@@ -152,6 +175,7 @@ export function getPublicState() {
       : null,
     selectionEndsInMs: round.status === 'WAITING' ? Math.max(0, round.waitEndsAt - now) : null,
     nextRoundInMs: round.status === 'ENDED' ? Math.max(0, round.nextRoundAt - now) : null,
+    roundEndDelayMs: Number(getSettings().roundEndDelayMs),
     winners: round.winners || [],
     drawNumber: round.called.size,
   };
@@ -162,13 +186,16 @@ export function getPlayerView(round, userId) {
   const player = round.players.find((p) => p.userId === userId);
   if (!player) return null;
   const payout = (round.payouts || {})[player.id] || 0;
+  const marks = ensureMarks(player);
   return {
     playerId: player.id,
     cards: player.cards,
     slots: player.slots || [],
+    autoMark: player.autoMark !== false,
+    marked: marks.map((set) => [...set].sort((a, b) => a - b)),
     spent: player.paidStake || 0,
     blocked: round.blocked.has(userId),
-    hasBingo: playerHasBingo(player, round),
+    hasBingo: playerHasBingo(player),
     isWinner: Boolean(round.winnerIds?.includes(player.id)),
     winAmount: payout,
     roundId: round.id,
@@ -314,6 +341,8 @@ async function createRound() {
         phone4: randomPhone4(),
         cards,
         slots: [slot],
+        marks: emptyMarks(cards),
+        autoMark: true,
         paidStake: 0,
         claimAt: 0,
         claimed: false,
@@ -337,6 +366,61 @@ async function createRound() {
   }
 }
 
+/**
+ * Applies a winner override to the round that is currently accepting it.
+ * A waiting round accepts any player (they can still buy a card); a calling
+ * round only accepts a player who already holds a card. A bot override uses
+ * an existing bot seat so it never adds a fake player mid-round.
+ */
+export async function applyWinnerToCurrentRound(override) {
+  const round = state.current;
+  if (!round || round.status === 'ENDED') return null;
+
+  for (const player of round.players) player.forced = false;
+  round.forcedWinner = null;
+
+  if (override.type === 'user') {
+    if (round.status === 'CALLING' && !round.players.some((p) => p.userId === override.userId)) {
+      return null;
+    }
+    round.forcedWinner = { ...override };
+  } else if (override.type === 'bot') {
+    const bot = round.players.find((p) => p.isBot && !p.forced) || round.players.find((p) => p.isBot);
+    if (!bot) return null;
+    bot.forced = true;
+    bot.name = override.name || bot.name;
+    round.forcedWinner = { type: 'bot', name: bot.name };
+  } else {
+    return null;
+  }
+
+  await setSetting('nextWinner', 'none');
+  await prisma.game
+    .update({
+      where: { id: round.id },
+      data: {
+        forcedWinnerType: round.forcedWinner.type,
+        forcedWinnerId: round.forcedWinner.type === 'user' ? round.forcedWinner.userId : null,
+      },
+    })
+    .catch(() => {});
+  broadcastAll();
+  return round.status === 'WAITING' ? 'waiting' : 'calling';
+}
+
+/** Clears a queued override and any override already attached to the live round. */
+export async function clearWinnerOverride() {
+  await setSetting('nextWinner', 'none');
+  const round = state.current;
+  if (!round || round.status === 'ENDED') return;
+  round.forcedWinner = null;
+  for (const player of round.players) player.forced = false;
+  await prisma.game
+    .update({ where: { id: round.id }, data: { forcedWinnerType: null, forcedWinnerId: null } })
+    .catch(() => {});
+  broadcastAll();
+}
+
 async function startCalling() {
   const round = state.current;
   if (!round || round.status !== 'WAITING') return;
@@ -357,6 +441,9 @@ async function callNextNumber() {
   }
   round.called.add(number);
   round.lastCalled = number;
+  for (const player of round.players) {
+    if (player.autoMark) markCalledNumbers(player.cards, ensureMarks(player), [number]);
+  }
   round.nextCallAt = Date.now() + Math.max(1000, Number(getSettings().callIntervalMs));
   await prisma.calledNumber.create({ data: { gameId: round.id, number } }).catch(() => {});
   broadcast('number', { number, roundId: round.id });
@@ -405,44 +492,28 @@ async function finishRound(triggerPlayer, reason) {
   }
 
   const realWinners = winners.filter((p) => !p.isBot);
-  const { pool, platformFee, share } = computePayout({
+  const { pool, platformFee, share } = settleRound({
     stakes: totalRealStakes(round.players),
     platformFeeRate: settings.platformFeeRate,
     realWinnerCount: realWinners.length,
   });
 
-  // The winner popup advertises the round's pot, which counts every card in
-  // play (bots hold a card too). This is display only: real winners are still
-  // paid `share` of the real stakes, because bots never pay or receive money.
-  // A bot shows the real pot when players paid into it; in a round with no real
-  // stakes it shows its share of the advertised pot so the popup never reads
-  // 0.00 when a bot wins.
-  const displayPool = computePayout({
-    stakes: round.players.reduce(
-      (sum, p) => sum + (p.isBot ? round.stake : Math.max(0, Number(p.paidStake) || 0)),
-      0,
-    ),
-    platformFeeRate: settings.platformFeeRate,
-    realWinnerCount: 0,
-  }).pool;
+  // Bots hold seats, never money. A bot winner gets no prize and the stakes
+  // stay with the platform; only real winners are paid from the real pool.
 
-  // Everyone is shown the same way: name, last four digits, the winning card
-  // and the amount they won. Bot wins are intentionally indistinguishable from
-  // player wins.
+  // Real winners show their cash prize. A bot win still shows the winning
+  // card and masked phone, but no amount: no money moves for a bot.
   round.winners = winners.map((p) => {
-    const winning = winnerCardFor(p, round.called);
+    const winning = winnerCardFor(p);
     return {
       name: p.name,
       phone4: phone4From(p.phone),
       phoneMasked: maskPhone(p.phone),
-      amount: p.isBot
-        ? realWinners.length
-          ? share
-          : Math.floor(displayPool / Math.max(1, winners.length))
-        : share,
+      amount: p.isBot ? 0 : share,
       cardNumber: winning?.cardNumber || 1,
       card: winning?.card || null,
       line: winning?.line || null,
+      marked: winning?.marked || [],
     };
   });
   round.winnerIds = winners.map((p) => p.id);
@@ -617,6 +688,9 @@ export async function joinRound(user, selection = []) {
     if (player) {
       player.cards = [...player.cards, ...generated];
       player.slots = [...(player.slots || []), ...slots];
+      player.marks = [...ensureMarks(player), ...emptyMarks(generated)];
+      player.autoMark = fresh.autoMark !== false;
+      if (player.autoMark) markCalledNumbers(player.cards, player.marks, round.called);
       player.paidStake += total;
       await prisma.gamePlayer.update({
         where: { id: player.id },
@@ -640,6 +714,8 @@ export async function joinRound(user, selection = []) {
         phone4: phone4From(fresh.phone),
         cards: generated,
         slots: [...slots],
+        marks: emptyMarks(generated),
+        autoMark: fresh.autoMark !== false,
         paidStake: total,
         claimAt: 0,
         claimed: false,
@@ -728,6 +804,60 @@ export async function claimBingo(user) {
   return { ok: true, winners: round.winners };
 }
 
+/**
+ * Per-player Auto Marking. Turning it ON immediately marks every called number
+ * that is on the player's cards; turning it OFF leaves existing marks intact
+ * and requires a tap for future calls.
+ */
+export async function setAutoMark(user, enabled) {
+  const autoMark = Boolean(enabled);
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { autoMark },
+    select: { autoMark: true },
+  });
+
+  const round = state.current;
+  const player = round?.players.find((p) => p.userId === user.id);
+  if (!player) return { autoMark: updated.autoMark, you: null };
+
+  player.autoMark = updated.autoMark;
+  if (player.autoMark) markCalledNumbers(player.cards, ensureMarks(player), round.called);
+  emitToUser(user.id, 'you', getPlayerView(round, user.id));
+  return { autoMark: updated.autoMark, you: getPlayerView(round, user.id) };
+}
+
+/** Records one manual mark for an Auto OFF player. */
+export async function markNumber(user, cardIndex, number) {
+  const round = state.current;
+  if (!round || round.status !== 'CALLING') {
+    throw new AppError('ማመልከቻ የሚቻልበት ንቁ ዙር የለም።');
+  }
+  const player = round.players.find((p) => p.userId === user.id);
+  if (!player) throw new AppError('በዚህ ዙር አይጫወቱም።');
+  if (player.autoMark !== false) {
+    throw new AppError('Auto Marking ON ነው። ቁጥሮች በራስ-ሰር ይመረጣሉ።');
+  }
+
+  const index = Math.floor(Number(cardIndex));
+  const n = Math.floor(Number(number));
+  if (!Number.isInteger(index) || index < 0 || index >= (player.cards || []).length) {
+    throw new AppError('ካርድ አልተገኘም።');
+  }
+  if (!Number.isInteger(n) || !round.called.has(n)) {
+    throw new AppError('ይህ ቁጥር አልተጠራም።');
+  }
+
+  const marks = ensureMarks(player);
+  if (!marks[index].has(n) && !markCard(player.cards, marks, index, n)) {
+    throw new AppError('ይህ ቁጥር በካርድዎ ላይ አልተገኘም።');
+  }
+
+  const view = getPlayerView(round, user.id);
+  emitToUser(user.id, 'you', view);
+  return { ok: true, you: view };
+}
+
 export async function startRoundNow() {
   const round = state.current;
   if (!round) throw new AppError('No round is waiting.');
@@ -747,13 +877,15 @@ export async function adminRoundDetails() {
     bots: round.players.filter((p) => p.isBot).map((p) => ({ id: p.id, name: p.name })),
     forcedWinner: round.forcedWinner,
     calledOrder: [...round.called],
+    upcomingNumbers: [...round.deck].reverse(),
     realPlayers: round.players
       .filter((p) => !p.isBot)
       .map((p) => ({
         id: p.userId,
         name: p.name,
         bingo: playerHasBingo(p, round),
-        cards: p.cards.length,
+        cards: p.cards,
+        cardCount: p.cards.length,
         numbers: p.slots || [],
       })),
   };
