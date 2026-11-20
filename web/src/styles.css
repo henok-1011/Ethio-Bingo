@@ -425,6 +425,33 @@ textarea {
   margin-top: 10px;
 }
 
+/* Small card-selection confirmation */
+.slot-pop {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  z-index: 95;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.96);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  animation: toastIn 0.18s ease;
+}
+.slot-pop b {
+  font-weight: 800;
+}
+.slot-pop.removed {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(51, 65, 85, 0.96);
+  color: #dbe4ef;
+}
+
 /* Toast */
 .toast-stack {
   position: fixed;
@@ -3004,10 +3031,10 @@ td strong {
   transform: scale(0.94);
 }
 .pick-cell.mine {
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.42);
+  border-color: #3b82f6;
+  background: rgba(37, 99, 235, 0.5);
   color: #fff;
-  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.55), 0 0 8px rgba(239, 68, 68, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 8px rgba(37, 99, 235, 0.4);
 }
 .pick-cell.taken {
   opacity: 0.3;
@@ -3066,6 +3093,35 @@ td strong {
   border-radius: 10px;
   margin: 6px 0 10px;
   border: 1px solid var(--line);
+}
+.active-broadcast {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.active-broadcast-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.active-broadcast-head span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.active-broadcast p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.active-broadcast-actions,
+.broadcast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 @media (max-width: 380px) {
@@ -3610,10 +3666,10 @@ td strong {
   font-size: 11px;
 }
 .jo-game .pick-cell.mine {
-  border-color: #e74c3c;
-  background: #e74c3c;
+  border-color: #3b82f6;
+  background: #2563eb;
   color: #fff;
-  box-shadow: none;
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.38);
 }
 .jo-game .pick-cell.taken {
   opacity: 0.28;
@@ -4038,11 +4094,11 @@ td strong {
   transform: scale(0.94);
 }
 .jo-select-grid .pick-cell.mine {
-  background: #ea4646;
+  background: #2563eb;
   color: #fff;
   font-weight: 800;
-  box-shadow: 0 0 8px rgba(234, 70, 70, 0.45);
-  cursor: default;
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
+  cursor: pointer;
 }
 .jo-select-grid .pick-cell.taken {
   background: #62252c;
@@ -4072,7 +4128,7 @@ td strong {
   height: 9px;
   border-radius: 3px;
 }
-.jo-select-legend .yours { background: #ea4646; }
+.jo-select-legend .yours { background: #2563eb; }
 .jo-select-legend .locked {
   background: #62252c;
   box-shadow: inset 0 0 0 1px rgba(234, 70, 70, 0.4);
@@ -4175,22 +4231,40 @@ td strong {
 }
 .winner-card-owner {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: -2px;
+  padding: 7px 9px;
+  border: 1px solid rgba(30, 77, 86, 0.14);
+  border-radius: 9px;
+  background: rgba(30, 77, 86, 0.08);
   color: #1f2937;
   font-size: 11px;
 }
-.winner-card-owner span {
+.winner-card-owner .winner-owner-tag {
   color: #4b5563;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  white-space: nowrap;
 }
-.winner-card-owner strong {
+.winner-card-owner .winner-owner-name {
+  flex: 1;
   overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  text-align: center;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.winner-card-owner .winner-owner-phone {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: none;
   white-space: nowrap;
 }
 .winner-letters {

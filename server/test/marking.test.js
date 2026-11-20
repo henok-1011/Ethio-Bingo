@@ -7,6 +7,7 @@ import {
   markCalledNumbers,
   markCard,
   markedSet,
+  unmarkCard,
 } from '../src/marking.js';
 
 const CARD_A = [
@@ -61,6 +62,20 @@ test('manual marking only records a matching cell on the selected card', () => {
   assert.equal(markCard(cards, marks, 1, 6), true);
   assert.equal(markCard(cards, marks, 2, 6), false);
   assert.equal(markCard(cards, marks, 1, 0), false);
+});
+
+test('a manual mark can be removed with a second tap', () => {
+  const cards = [CARD_A];
+  const marks = emptyMarks(cards);
+
+  assert.equal(markCard(cards, marks, 0, 1), true);
+  assert.equal(unmarkCard(cards, marks, 0, 1), true);
+  assert.equal(marks[0].has(1), false);
+  assert.equal(unmarkCard(cards, marks, 0, 1), false);
+
+  // Only a number on the card can be unmarked.
+  assert.equal(unmarkCard(cards, marks, 0, 6), false);
+  assert.equal(unmarkCard(cards, marks, 1, 1), false);
 });
 
 test('two marked patterns win even when the called list is not passed in', () => {

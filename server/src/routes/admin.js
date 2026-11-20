@@ -60,6 +60,17 @@ function parsePositive(value, name, { min = 1, max = 1e9 } = {}) {
   return n;
 }
 
+function parseBroadcast(body) {
+  const text = String(body?.text || '').trim();
+  const imageUrl = String(body?.imageUrl || '').trim();
+  if (!text) throw new AppError('Write the ad message first.');
+  if (text.length > 4000) throw new AppError('Message is too long (max 4000 characters).');
+  if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
+    throw new AppError('Image URL must start with http:// or https://.');
+  }
+  return { text, imageUrl: imageUrl || null };
+}
+
 router.get(
   '/overview',
   asyncHandler(async (_req, res) => {
@@ -608,22 +619,44 @@ router.put(
 router.post(
   '/broadcast',
   asyncHandler(async (req, res) => {
-    const text = String(req.body?.text || '').trim();
-    const imageUrl = String(req.body?.imageUrl || '').trim();
-    if (!text) throw new AppError('Write the ad message first.');
-    if (text.length > 4000) throw new AppError('Message is too long (max 4000 characters).');
-    if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
-      throw new AppError('Image URL must start with http:// or https://.');
-    }
-    const result = await broadcastTelegram(text, req.staff.sid, imageUrl || null);
+    const { text, imageUrl } = parseBroadcast(req.body);
+    const result = await broadcastTelegram(text, req.staff.sid, imageUrl);
     const at = new Date().toISOString();
     await updateSettings(
       { announcementText: text, announcementImage: imageUrl || '', announcementAt: at },
       req.staff.sid,
     );
-    const announcement = { text, imageUrl: imageUrl || null, at };
+    const announcement = { text, imageUrl, at };
     broadcast('announcement', announcement);
     res.json({ ...result, announcement });
+  }),
+);
+
+router.put(
+  '/broadcast',
+  asyncHandler(async (req, res) => {
+    const { text, imageUrl } = parseBroadcast(req.body);
+    const at = new Date().toISOString();
+    await updateSettings(
+      { announcementText: text, announcementImage: imageUrl || '', announcementAt: at },
+      req.staff.sid,
+    );
+    const announcement = { text, imageUrl, at };
+    broadcast('announcement', announcement);
+    res.json({ edited: true, announcement });
+  }),
+);
+
+router.delete(
+  '/broadcast',
+  asyncHandler(async (req, res) => {
+    await updateSettings(
+      { announcementText: '', announcementImage: '', announcementAt: '' },
+      req.staff.sid,
+    );
+    const announcement = { text: '', imageUrl: null, at: null };
+    broadcast('announcement', announcement);
+    res.json({ deleted: true, announcement });
   }),
 );
 

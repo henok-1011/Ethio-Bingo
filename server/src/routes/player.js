@@ -4,7 +4,7 @@ import { prisma } from '../db.js';
 import { requirePlayer } from '../auth.js';
 import { asyncHandler, AppError } from '../util.js';
 import { getSettings } from '../settings.js';
-import { MAX_CARDS, getStateForUser, joinRound, claimBingo, markNumber, setAutoMark } from '../engine.js';
+import { MAX_CARDS, getStateForUser, joinRound, deselectCard, claimBingo, markNumber, setAutoMark } from '../engine.js';
 import { BANKS, requestWithdrawal, verifyDeposit } from '../wallet.js';
 import { verifyReceiptDeposit } from '../receipt-deposits.js';
 import { setSetting } from '../settings.js';
@@ -94,6 +94,14 @@ router.post(
   '/game/join',
   asyncHandler(async (req, res) => {
     const result = await joinRound(req.user, req.body?.cards);
+    res.json(result);
+  }),
+);
+
+router.post(
+  '/game/deselect',
+  asyncHandler(async (req, res) => {
+    const result = await deselectCard(req.user, req.body?.card);
     res.json(result);
   }),
 );

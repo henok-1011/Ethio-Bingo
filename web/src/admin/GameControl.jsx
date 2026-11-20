@@ -41,6 +41,7 @@ export default function GameControl({ token }) {
   const [broadcast, setBroadcast] = useState('');
   const [broadcastImage, setBroadcastImage] = useState('');
   const [broadcastResult, setBroadcastResult] = useState(null);
+  const [editingBroadcast, setEditingBroadcast] = useState(false);
   const [winnerType, setWinnerType] = useState('none');
   const [winnerUserId, setWinnerUserId] = useState('');
   const [botName, setBotName] = useState('Lucky Bot');
@@ -145,16 +146,65 @@ export default function GameControl({ token }) {
     }
   }
 
+  function startBroadcastEdit() {
+    setBroadcast(settings?.announcementText || '');
+    setBroadcastImage(settings?.announcementImage || '');
+    setEditingBroadcast(true);
+    setBroadcastResult(null);
+  }
+
+  function cancelBroadcastEdit() {
+    setEditingBroadcast(false);
+    setBroadcast('');
+    setBroadcastImage('');
+    setBroadcastResult(null);
+  }
+
+  async function deleteBroadcast() {
+    if (!window.confirm('Delete the active in-app ad? Telegram messages that were already sent cannot be recalled.')) return;
+    try {
+      await api('/api/admin/broadcast', { token, method: 'DELETE' });
+      setSettings((prev) => prev
+        ? { ...prev, announcementText: '', announcementImage: '', announcementAt: '' }
+        : prev);
+      setEditingBroadcast(false);
+      setBroadcast('');
+      setBroadcastImage('');
+      setBroadcastResult({ deleted: true });
+      toast('Active ad deleted.');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
   async function sendBroadcast(event) {
     event.preventDefault();
+    const editing = editingBroadcast;
     try {
       const result = await api('/api/admin/broadcast', {
         token,
-        method: 'POST',
+        method: editing ? 'PUT' : 'POST',
         body: { text: broadcast, imageUrl: broadcastImage || undefined },
       });
+      setSettings((prev) => prev
+        ? {
+            ...prev,
+            announcementText: result.announcement?.text || '',
+            announcementImage: result.announcement?.imageUrl || '',
+            announcementAt: result.announcement?.at || '',
+          }
+        : prev);
       setBroadcastResult(result);
-      toast(result.simulated ? 'Broadcast simulated (no bot token configured).' : `Sent to ${result.sent} users.`);
+      setBroadcast('');
+      setBroadcastImage('');
+      setEditingBroadcast(false);
+      toast(
+        editing
+          ? 'Active ad updated.'
+          : result.simulated
+            ? 'Broadcast simulated (no bot token configured).'
+            : `Sent to ${result.sent} users.`,
+      );
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -534,6 +584,30 @@ export default function GameControl({ token }) {
             <h3>Broadcast ads</h3>
             <span className="badge">Telegram bot</span>
           </div>
+          {settings?.announcementText ? (
+            <div className="active-broadcast">
+              <div className="active-broadcast-head">
+                <strong>Active in-app ad</strong>
+                {settings.announcementAt ? (
+                  <span>{new Date(settings.announcementAt).toLocaleString()}</span>
+                ) : null}
+              </div>
+              {settings.announcementImage ? (
+                <img className="broadcast-preview" src={settings.announcementImage} alt="Active ad preview" />
+              ) : null}
+              <p>{settings.announcementText}</p>
+              <div className="active-broadcast-actions">
+                <button type="button" className="btn small" onClick={startBroadcastEdit}>
+                  Edit
+                </button>
+                <button type="button" className="btn small danger" onClick={deleteBroadcast}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="fine-print">No active in-app ad.</p>
+          )}
           <form onSubmit={sendBroadcast}>
             <textarea
               rows={4}
@@ -552,14 +626,30 @@ export default function GameControl({ token }) {
             {broadcastImage ? (
               <img className="broadcast-preview" src={broadcastImage} alt="Broadcast preview" />
             ) : null}
-            <button type="submit" className="btn primary" disabled={!broadcast.trim()}>
-              Send broadcast
-            </button>
+            <div className="broadcast-actions">
+              <button type="submit" className="btn primary" disabled={!broadcast.trim()}>
+                {editingBroadcast ? 'Save changes' : 'Send broadcast'}
+              </button>
+              {editingBroadcast ? (
+                <button type="button" className="btn ghost" onClick={cancelBroadcastEdit}>
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+            {editingBroadcast ? (
+              <p className="fine-print">
+                This updates the in-app ad only. Telegram messages already sent are not changed.
+              </p>
+            ) : null}
             {broadcastResult && (
               <p className="fine-print">
-                {broadcastResult.simulated
-                  ? `Simulated Broadcast — ${broadcastResult.total} users would receive it. Set TELEGRAM_BOT_TOKEN to send for real.`
-                  : `Delivered: ${broadcastResult.sent} · Failed: ${broadcastResult.failed} · Total: ${broadcastResult.total}`}
+                {broadcastResult.deleted
+                  ? 'Active in-app ad deleted. Telegram messages already sent cannot be recalled.'
+                  : broadcastResult.edited
+                    ? 'Active in-app ad updated. Telegram messages already sent were not changed.'
+                    : broadcastResult.simulated
+                      ? `Simulated Broadcast — ${broadcastResult.total} users would receive it. Set TELEGRAM_BOT_TOKEN to send for real.`
+                      : `Delivered: ${broadcastResult.sent} · Failed: ${broadcastResult.failed} · Total: ${broadcastResult.total}`}
               </p>
             )}
           </form>

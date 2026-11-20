@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { api } from '../api.js';
-import { etb } from '../format.js';
 import { haptic, tg } from '../telegram.js';
 import { speakPhrase } from '../voice.js';
 import { useToast } from '../components/Toast.jsx';
@@ -241,7 +240,7 @@ export default function PlayerApp() {
   }, [token, refreshing, refreshMe, toast]);
 
   async function pickCard(slot) {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     try {
       const result = await api('/api/game/join', {
@@ -250,12 +249,35 @@ export default function PlayerApp() {
         body: { cards: [slot] },
       });
       if (result.you) setYou(result.you);
-      toast(`ካርድ #${slot} ተግዝቷል — ${etb(game?.stake || me?.config?.stake)} ETB`);
       haptic('success');
       await refreshMe();
+      return true;
     } catch (err) {
       toast(err.message, 'error');
       haptic('error');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deselectCard(slot) {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const result = await api('/api/game/deselect', {
+        token,
+        method: 'POST',
+        body: { card: slot },
+      });
+      setYou(result.you || null);
+      haptic('light');
+      await refreshMe();
+      return true;
+    } catch (err) {
+      toast(err.message, 'error');
+      haptic('error');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -357,6 +379,7 @@ export default function PlayerApp() {
             me={me}
             stake={me.config?.stake}
             onPick={pickCard}
+            onDeselect={deselectCard}
             onClaim={claim}
             busy={busy}
             voiceOn={voiceOn}

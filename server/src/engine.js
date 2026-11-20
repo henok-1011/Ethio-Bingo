@@ -1,7 +1,7 @@
 import { prisma } from './db.js';
 import { getSettings, setSetting } from './settings.js';
 import { cardHasBingo, generateCard, shuffleDeck, winningLineFor, winningPatternCells } from './bingo.js';
-import { emptyMarks, markCard, markCalledNumbers, markedSet } from './marking.js';
+import { emptyMarks, markCard, markCalledNumbers, markedSet, unmarkCard } from './marking.js';
 import { broadcast, broadcastState, emitToUser } from './realtime.js';
 import { AppError } from './util.js';
 import { onStake } from './agents.js';
@@ -84,6 +84,20 @@ function removeBotsForRealCards(round, count) {
   }
   if (removed.length) round.removedBotIds.push(...removed);
   return removed;
+}
+
+async function pruneBotsForRealCards(round) {
+  const realCards = round.players
+    .filter((p) => !p.isBot)
+    .reduce((sum, p) => sum + (p.cards?.length || 0), 0);
+  const removedBots = removeBotsForRealCards(round, realCards);
+  if (!removedBots.length) return;
+  await prisma.gamePlayer
+    .deleteMany({ where: { id: { in: removedBots } } })
+    .catch((err) => console.error('[engine] bot cleanup failed:', err.message));
+  await prisma.game
+    .update({ where: { id: round.id }, data: { botCount: round.players.filter((p) => p.isBot).length } })
+    .catch(() => {});
 }
 
 /** Public winner phone format: +251*****9780 (only the last four digits are visible). */
@@ -194,7 +208,6 @@ export function getPlayerView(round, userId) {
     autoMark: player.autoMark !== false,
     marked: marks.map((set) => [...set].sort((a, b) => a - b)),
     spent: player.paidStake || 0,
-    blocked: round.blocked.has(userId),
     hasBingo: playerHasBingo(player),
     isWinner: Boolean(round.winnerIds?.includes(player.id)),
     winAmount: payout,
@@ -306,7 +319,6 @@ async function createRound() {
       waitEndsAt: Date.now() + Math.max(5, Number(settings.waitSeconds)) * 1000,
       nextCallAt: 0,
       nextRoundAt: 0,
-      blocked: new Set(),
       prizePool: 0,
       winners: [],
       winnerIds: [],
@@ -424,8 +436,21 @@ export async function clearWinnerOverride() {
 async function startCalling() {
   const round = state.current;
   if (!round || round.status !== 'WAITING') return;
+  // Lock the table first so no more card changes can race the kickoff.
   round.status = 'CALLING';
   round.nextCallAt = Date.now();
+  await pruneBotsForRealCards(round).catch((err) =>
+    console.error('[engine] bot cleanup failed:', err.message),
+  );
+  await Promise.all(
+    round.players
+      .filter((p) => !p.isBot && p.userId && p.paidStake > 0)
+      .map((p) =>
+        onStake(p.userId, p.paidStake).catch((err) =>
+          console.error('[engine] stake commission failed:', err.message),
+        ),
+      ),
+  );
   await prisma.game.update({ where: { id: round.id }, data: { status: 'CALLING', startedAt: new Date() } });
   broadcast('game:started', { roundId: round.id });
   broadcastAll();
@@ -724,18 +749,6 @@ export async function joinRound(user, selection = []) {
       round.players.push(player);
     }
 
-    // Each real card takes a bot's seat, so the table stays the same size while
-    // real players replace bots instead of piling on top of them.
-    const removedBots = removeBotsForRealCards(round, slots.length);
-    if (removedBots.length) {
-      await prisma.gamePlayer
-        .deleteMany({ where: { id: { in: removedBots } } })
-        .catch((err) => console.error('[engine] bot cleanup failed:', err.message));
-      await prisma.game
-        .update({ where: { id: round.id }, data: { botCount: round.players.filter((p) => p.isBot).length } })
-        .catch(() => {});
-    }
-
     await prisma.transaction.create({
       data: {
         userId: user.id,
@@ -752,8 +765,6 @@ export async function joinRound(user, selection = []) {
 
     round.prizePool = prizePoolFor(round);
     await prisma.game.update({ where: { id: round.id }, data: { prizePool: round.prizePool } });
-
-    await onStake(user.id, total);
 
     const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { balance: true } });
     emitToUser(user.id, 'balance', { balance: updated.balance });
@@ -783,21 +794,103 @@ export async function joinRound(user, selection = []) {
   }
 }
 
+/**
+ * Removes one card from a player's waiting-round selection. The number is freed
+ * and the stake is refunded so the player can choose a different card before
+ * the round starts. Once calling begins, selections are locked.
+ */
+export async function deselectCard(user, cardNumber) {
+  const round = state.current;
+  if (!round || round.status !== 'WAITING' || Date.now() >= round.waitEndsAt) {
+    throw new AppError('የመምረጫ ጊዜው አልቋል። የመረጡት ካርዶች ተቆልፈዋል።');
+  }
+  if (state.joining.has(user.id)) {
+    throw new AppError('ቀድሞ በመካሄድ ላይ ነው። እባክዎ ትንሽ ይጠብቁ።');
+  }
+
+  const slot = Math.floor(Number(cardNumber));
+  if (!Number.isInteger(slot) || slot < 1 || slot > MAX_CARDS) {
+    throw new AppError(`ካርድ ቁጥር ከ1 እስከ ${MAX_CARDS} መሆን አለበት።`);
+  }
+
+  const player = round.players.find((p) => p.userId === user.id);
+  if (!player) throw new AppError('በዚህ ዙር አይጫወቱም።');
+  const cardIndex = (player.slots || []).indexOf(slot);
+  if (cardIndex < 0) throw new AppError('ይህ ካርድ በምርጫዎ ውስጥ አልገኘም።');
+
+  state.joining.add(user.id);
+  try {
+    const nextCards = (player.cards || []).filter((_card, index) => index !== cardIndex);
+    const nextSlots = (player.slots || []).filter((_slot, index) => index !== cardIndex);
+    const nextMarks = ensureMarks(player).filter((_mark, index) => index !== cardIndex);
+    const refund = Math.min(round.stake, Math.max(0, player.paidStake || 0));
+    const nextPaid = Math.max(0, (player.paidStake || 0) - refund);
+    const playerIndex = round.players.indexOf(player);
+    const remainingStakes = Math.max(0, totalRealStakes(round.players) - refund);
+    const nextPool = computePayout({
+      stakes: remainingStakes,
+      platformFeeRate: getSettings().platformFeeRate,
+      realWinnerCount: 0,
+    }).pool;
+
+    await prisma.$transaction(async (tx) => {
+      if (nextCards.length) {
+        await tx.gamePlayer.update({
+          where: { id: player.id },
+          data: { cards: JSON.stringify(nextCards), paidStake: nextPaid },
+        });
+      } else {
+        await tx.gamePlayer.delete({ where: { id: player.id } });
+      }
+      if (refund > 0) {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { balance: { increment: refund } },
+        });
+        await tx.transaction.create({
+          data: {
+            userId: user.id,
+            type: 'refund',
+            amount: refund,
+            status: 'completed',
+            reference: `game:${round.id}`,
+            meta: `Card #${slot} deselected`,
+          },
+        });
+      }
+      await tx.game.update({ where: { id: round.id }, data: { prizePool: nextPool } });
+    });
+
+    round.taken.delete(slot);
+    player.cards = nextCards;
+    player.slots = nextSlots;
+    player.marks = nextMarks;
+    player.paidStake = nextPaid;
+    if (!nextCards.length && playerIndex >= 0) round.players.splice(playerIndex, 1);
+    round.prizePool = nextPool;
+
+    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { balance: true } });
+    const view = getPlayerView(round, user.id);
+    emitToUser(user.id, 'balance', { balance: updated?.balance ?? 0 });
+    emitToUser(user.id, 'you', view);
+    broadcastAll();
+
+    return { ok: true, card: slot, you: view, balance: updated?.balance ?? 0 };
+  } finally {
+    state.joining.delete(user.id);
+  }
+}
+
 export async function claimBingo(user) {
   const round = state.current;
   if (!round || round.status !== 'CALLING') {
     throw new AppError('ማመልከቻ የሚቻልበት ንቁ ዙር የለም።');
   }
-  if (round.blocked.has(user.id)) {
-    throw new AppError('ከተሳሳተ ጥያቄ በኋላ በዚህ ዙር እንዳያመለክቱ ተከልክለዋል።');
-  }
   const player = round.players.find((p) => p.userId === user.id);
   if (!player) throw new AppError('በዚህ ዙር አይጫወቱም።');
 
   if (!playerHasBingo(player, round)) {
-    round.blocked.add(user.id);
-    emitToUser(user.id, 'you', getPlayerView(round, user.id));
-    throw new AppError('የተሳሳተ ጥያቄ — እስካሁን ቢንጎ የለዎትም። በዚህ ዙር ተከልክለዋል።');
+    throw new AppError('የተሳሳተ ጥያቄ — እስካሁን ቢንጎ የለዎትም። ጨዋታውን ይቀጥሉ።');
   }
 
   await finishRound(player, 'claim');
@@ -849,13 +942,17 @@ export async function markNumber(user, cardIndex, number) {
   }
 
   const marks = ensureMarks(player);
-  if (!marks[index].has(n) && !markCard(player.cards, marks, index, n)) {
+  const wasMarked = marks[index].has(n);
+  const changed = wasMarked
+    ? unmarkCard(player.cards, marks, index, n)
+    : markCard(player.cards, marks, index, n);
+  if (!changed) {
     throw new AppError('ይህ ቁጥር በካርድዎ ላይ አልተገኘም።');
   }
 
   const view = getPlayerView(round, user.id);
   emitToUser(user.id, 'you', view);
-  return { ok: true, you: view };
+  return { ok: true, marked: !wasMarked, you: view };
 }
 
 export async function startRoundNow() {

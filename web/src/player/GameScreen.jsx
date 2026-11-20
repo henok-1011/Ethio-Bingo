@@ -27,9 +27,18 @@ function joColumnClass(number) {
   return `jo-col-${COLUMN_CLASSES[Math.floor((n - 1) / 15)]}`;
 }
 
+function firstName(value) {
+  return String(value || 'Player').trim().split(/\s+/)[0] || 'Player';
+}
+
+function maskedPhone(winner) {
+  const last4 = String(winner.phone4 || winner.phoneMasked || '').replace(/\D/g, '').slice(-4);
+  return last4 ? `+251***${last4}` : '';
+}
+
 function winnerBadge(winner) {
-  const phone = winner.phone4 ? ` ( *${winner.phone4})` : '';
-  return `${winner.name || 'Player'}${phone}`;
+  const phone = maskedPhone(winner);
+  return `${winner.name || 'Player'}${phone ? ` · ${phone}` : ''}`;
 }
 
 function useRemainingSeconds(ms) {
@@ -81,18 +90,18 @@ function WinnerOverlay({ game, you }) {
             {winners.map((winner, index) => {
               const lineSet = new Set((winner.line || []).map(([col, row]) => `${col}-${row}`));
               const markedNumbers = new Set(Array.isArray(winner.marked) ? winner.marked : [...called]);
+              const phone = maskedPhone(winner);
               return (
                 <article
                   className="winner-card-shell"
                   key={`${winner.name}-${winner.phoneMasked || winner.phone4}-${index}`}
                 >
                   <div className="winner-card-inner">
-                    {winners.length > 1 && (
-                      <div className="winner-card-owner">
-                        <span>አሸናፊ {index + 1}</span>
-                        <strong>{winner.name}</strong>
-                      </div>
-                    )}
+                    <div className="winner-card-owner">
+                      <span className="winner-owner-tag">አሸናፊ {index + 1}</span>
+                      <strong className="winner-owner-name">{firstName(winner.name)}</strong>
+                      {phone ? <span className="winner-owner-phone">{phone}</span> : null}
+                    </div>
 
                     <div className="winner-letters">
                       {COLUMNS.map((letter) => (
@@ -152,6 +161,7 @@ export default function GameScreen({
   me,
   stake,
   onPick,
+  onDeselect,
   onClaim,
   busy,
   voiceOn,
@@ -167,10 +177,12 @@ export default function GameScreen({
 }) {
   const maxCards = Math.max(1, Math.min(432, Math.floor(Number(maxCardsProp) || 432)));
   const lastPlayed = useRef(null);
-  // Numbers show red the instant they are tapped, before the server confirms the
-  // purchase; the entry is dropped again if the join fails.
+  // Numbers show blue the instant they are tapped, before the server confirms
+  // the change; the entry is dropped again if the request fails.
   const [pendingPicks, setPendingPicks] = useState(() => new Set());
   const [pendingMarks, setPendingMarks] = useState({});
+  const [slotNotice, setSlotNotice] = useState(null);
+  const noticeTimer = useRef(null);
 
   const called = useMemo(() => new Set(game?.calledNumbers || []), [game?.calledNumbers]);
   const callHistory = useMemo(
@@ -226,6 +238,7 @@ export default function GameScreen({
     () => () => {
       stopSpeaking();
       stopCallAudio();
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
     },
     [],
   );
@@ -241,11 +254,17 @@ export default function GameScreen({
   const autoMarkOn = you ? you.autoMark !== false : me?.user?.autoMark !== false;
   const hasPendingMarks = Object.keys(pendingMarks).length > 0;
 
-  const pickSlot = async (slot) => {
-    if (pendingPicks.has(slot)) return;
+  const toggleSlot = async (slot) => {
+    if (pendingPicks.has(slot) || busy) return;
+    const mine = mySlotSet.has(slot);
     setPendingPicks((prev) => new Set(prev).add(slot));
     try {
-      await onPick?.(slot);
+      const changed = mine ? await onDeselect?.(slot) : await onPick?.(slot);
+      if (changed) {
+        setSlotNotice({ slot, action: mine ? 'removed' : 'picked' });
+        if (noticeTimer.current) clearTimeout(noticeTimer.current);
+        noticeTimer.current = setTimeout(() => setSlotNotice(null), 1600);
+      }
     } finally {
       setPendingPicks((prev) => {
         const next = new Set(prev);
@@ -498,21 +517,22 @@ export default function GameScreen({
                     key={slot}
                     type="button"
                     className={`pick-cell ${mine ? 'mine' : ''} ${taken ? 'taken' : ''}`}
-                    disabled={taken || mine || busy}
-                    onClick={() => pickSlot(slot)}
+                    disabled={taken || busy}
+                    onClick={() => toggleSlot(slot)}
+                    aria-pressed={mine}
                     title={
                       mine
-                        ? `ካርድ ${slot} የእርስዎ ነው`
+                        ? `ካርድ ${slot} — ለመሰረዝ ይንኩ`
                         : taken
                           ? `ካርድ ${slot} በሌላ ተጫዋች ተመርጧል`
-                          : `ካርድ ${slot} ይግዙ`
+                          : `ካርድ ${slot} ይምረጡ`
                     }
                     aria-label={
                       mine
-                        ? `ካርድ ${slot} ተመርጧል`
+                        ? `ካርድ ${slot} ተመርጧል። ለመሰረዝ ይንኩ`
                         : taken
                           ? `ካርድ ${slot} በሌላ ተጫዋች ተመርጧል`
-                          : `ካርድ ${slot} ይግዙ`
+                          : `ካርድ ${slot} ይምረጡ`
                     }
                   >
                     {slot}
@@ -535,8 +555,8 @@ export default function GameScreen({
 
             <div className="jo-select-note amharic">
               {you
-                ? 'ተቀላቅለዋል። ተጨማሪ ካርድ መምረጥ ይችላሉ — ጊዜው እስኪያልቅ።'
-                : 'ካርድ ለመግዛት ቁጥር ይንኩ። የሌላ ተጫዋች የተመረጠ ካርድ አይነካም።'}
+                ? 'ተቀላቅለዋል። ተጨማሪ ካርድ መምረጥ ወይም መሰረዝ ይችላሉ — ጨዋታው እስኪጀመር።'
+                : 'ካርድ ለመምረጥ ቁጥር ይንኩ። እንደገና በመንካት መሰረዝ ይችላሉ።'}
             </div>
           </section>
         )}
@@ -607,8 +627,15 @@ export default function GameScreen({
                         type="button"
                         className={`pick-cell ${mine ? 'mine' : ''} ${taken ? 'taken' : ''}`}
                         disabled={taken || busy}
-                        onClick={() => pickSlot(slot)}
-                        aria-label={taken ? `ካርድ ${slot} ተመርጧል` : `ካርድ ${slot} ይግዙ`}
+                        onClick={() => toggleSlot(slot)}
+                        aria-pressed={mine}
+                        aria-label={
+                          mine
+                            ? `ካርድ ${slot} ተመርጧል። ለመሰረዝ ይንኩ`
+                            : taken
+                              ? `ካርድ ${slot} በሌላ ተጫዋች ተመርጧል`
+                              : `ካርድ ${slot} ይምረጡ`
+                        }
                       >
                         {slot}
                       </button>
@@ -618,7 +645,7 @@ export default function GameScreen({
                 {you && (
                   <div className="waiting-note amharic">
                     <span className="pulse-dot" /> ተቀላቅለዋል። ተጨማሪ ካርድ መምረጥ
-                    ይችላሉ — ጊዜው እስኪያልቅ።
+                    ወይም መሰረዝ ይችላሉ — ጨዋታው እስኪጀመር።
                   </div>
                 )}
               </div>
@@ -667,20 +694,23 @@ export default function GameScreen({
                           const n = card[col][row];
                           const marked = n === 0 || markedNumbers.has(n);
                           const selected = winSet.has(`${col}-${row}`);
-                          const canMark =
-                            !autoMarkOn && isCalling && n > 0 && called.has(n) && !marked;
+                          const canToggle =
+                            !autoMarkOn && isCalling && n > 0 && called.has(n);
                           return (
                             <button
                               key={col}
                               type="button"
-                              className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''} ${canMark ? 'available' : ''}`}
-                              disabled={!canMark}
+                              className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''} ${canToggle && !marked ? 'available' : ''}`}
+                              disabled={!canToggle}
                               onClick={() => markCell(index, n)}
+                              aria-pressed={marked}
                               aria-label={
                                 n === 0
                                   ? 'ነጻ ማዕከል'
-                                  : canMark
-                                    ? `ቁጥር ${n} ምልክት ያድርጉ`
+                                  : canToggle
+                                    ? marked
+                                      ? `ቁጥር ${n} ምልክቱን ያንሱ`
+                                      : `ቁጥር ${n} ምልክት ያድርጉ`
                                     : `ቁጥር ${n}`
                               }
                             >
@@ -719,10 +749,10 @@ export default function GameScreen({
             <button
               type="button"
               className={`jo-cta ${you.hasBingo ? 'ready' : ''}`}
-              disabled={busy || you.blocked || hasPendingMarks || autoMarkBusy}
+              disabled={busy || hasPendingMarks || autoMarkBusy}
               onClick={onClaim}
             >
-              {you.blocked ? 'ተከልክለዋል' : you.hasBingo ? 'BINGO! አሁን ይጠይቁ' : 'BINGO!'}
+              {you.hasBingo ? 'BINGO! አሁን ይጠይቁ' : 'BINGO!'}
             </button>
           ) : (
             <button
@@ -737,6 +767,13 @@ export default function GameScreen({
         </div>
 
         <div className="jo-footer">Ethio Bingo · መልካም እድል</div>
+
+        {slotNotice ? (
+          <div className={`slot-pop ${slotNotice.action}`} role="status">
+            <b>#{slotNotice.slot}</b>{' '}
+            {slotNotice.action === 'picked' ? 'ተመርጧል' : 'ተሰርዟል'}
+          </div>
+        ) : null}
       </div>
 
       {ended && <WinnerOverlay game={game} you={you} />}
