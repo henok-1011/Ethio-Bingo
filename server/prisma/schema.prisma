@@ -81,7 +81,7 @@ model Referral {
 model AgentTransaction {
   id              Int      @id @default(autoincrement())
   agentId         Int
-  type            String // deposit_bonus | activity_bonus | gameplay_commission | withdrawal | adjustment
+  type            String // card_purchase_commission | card_purchase_reversal | withdrawal | adjustment (legacy bonus types may remain in history)
   amount          Int // signed for adjustments
   referenceUserId Int?
   status          String   @default("completed")

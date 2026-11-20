@@ -297,7 +297,6 @@ export default function Agents({ token }) {
                     <span className={`status-dot ${agent.isActive ? 'completed' : 'rejected'}`}>
                       {agent.isActive ? 'ACTIVE' : 'DISABLED'}
                     </span>
-                    <div className="muted small">{agent.activityBonusPaid ? 'bonus paid' : 'bonus pending'}</div>
                   </td>
                   <td>
                     <div className="row-actions">
@@ -349,8 +348,8 @@ export default function Agents({ token }) {
               <strong>{detail.agent.activeReferralCount}</strong>
             </div>
             <div>
-              <span className="muted small">Activity bonus</span>
-              <strong>{detail.agent.activityBonusPaid ? 'Paid' : 'Not paid'}</strong>
+              <span className="muted small">Commission rule</span>
+              <strong>0.50 ETB / card</strong>
             </div>
             <div>
               <span className="muted small">Created</span>

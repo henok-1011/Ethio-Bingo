@@ -67,6 +67,7 @@ function WinnerOverlay({ game, you }) {
   const totalSeconds = Math.max(1, Math.ceil(Number(game?.roundEndDelayMs || 8000) / 1000));
   const progress = Math.max(0, Math.min(100, (secondsLeft / totalSeconds) * 100));
   const first = winners[0];
+  const prizePot = Number(game?.prizePool || 0);
 
   return (
     <div className="winner-overlay" role="dialog" aria-modal="true" aria-label="የቢንጎ አሸናፊዎች">
@@ -84,6 +85,7 @@ function WinnerOverlay({ game, you }) {
                 <span className="winner-count-line">{winners.length} አሸናፊዎች በዚህ ዙር</span>
               )}
             </div>
+            <div className="winner-pot">Total prize pot: {etb(prizePot)} ETB</div>
           </header>
 
           <div className="winner-cards">
@@ -130,7 +132,11 @@ function WinnerOverlay({ game, you }) {
                     </div>
 
                     <div className="winner-card-foot">
-                      <span className="winner-prize">Prize: {etb(winner.amount)} ETB</span>
+                      <span className="winner-prize">
+                        {winner.amount > 0
+                          ? `Winner's prize: ${etb(winner.amount)} ETB`
+                          : 'No cash prize'}
+                      </span>
                       <span className="winner-card-no">Card# {winner.cardNumber}</span>
                     </div>
                   </div>
@@ -294,14 +300,12 @@ export default function GameScreen({
   const takenSet = useMemo(() => new Set(game?.takenCards || []), [game?.takenCards]);
   const perCard = game?.stake || stake || 0;
   const spent = you?.spent || 0;
-  const feeRate = Math.min(1, Math.max(0, Number(me?.config?.platformFeeRate ?? 0.2)));
-  // Only real stakes fund the pool. Bots occupy seats but never pay or win
-  // money, so their cards must not inflate the displayed pot or prize.
-  const poolDisplay = game?.prizePool || 0;
-  const estimatedWin = Math.floor(poolDisplay + perCard * (1 - feeRate));
+  // Bots are counted as players in the prize calculation. They can win a
+  // round, but never receive cash. The server is the source of truth here.
+  const poolDisplay = Number(game?.prizePool || 0);
   const stakeSantim = game?.stake || stake || 0;
   const players = Number(game?.playersCount || 0);
-  const derash = Math.max(0, Math.floor(players * stakeSantim * (1 - feeRate)));
+  const derash = poolDisplay;
   const calledCount = game?.drawNumber ?? game?.calledNumbers?.length ?? 0;
   const boardNumbers = Array.from({ length: 15 }, (_, row) =>
     COLUMNS.map((_, col) => RANGES[col][0] + row),
@@ -496,7 +500,9 @@ export default function GameScreen({
               </span>
             </div>
 
-            <div className="jo-select-win">Win: {etb(estimatedWin)} ETB</div>
+            <div className="jo-select-win" aria-live="polite">
+              Live prize pot: {etb(poolDisplay)} ETB
+            </div>
 
             <div className="jo-select-head">
               <div>
@@ -582,8 +588,8 @@ export default function GameScreen({
                 <strong>{etb(spent)} ETB</strong>
               </div>
               <div className="win">
-                <span>የሚገመት ሽልማት</span>
-                <strong>{etb(estimatedWin)} ETB</strong>
+                <span>የሽልማት ገንዘብ</span>
+                <strong>{etb(poolDisplay)} ETB</strong>
               </div>
             </div>
 
@@ -700,7 +706,7 @@ export default function GameScreen({
                             <button
                               key={col}
                               type="button"
-                              className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''} ${canToggle && !marked ? 'available' : ''}`}
+                              className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''}`}
                               disabled={!canToggle}
                               onClick={() => markCell(index, n)}
                               aria-pressed={marked}

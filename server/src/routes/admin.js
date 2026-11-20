@@ -9,6 +9,7 @@ import { asyncHandler, AppError } from '../util.js';
 import { adminOverview, exportCsv, phoneStatusWhere } from '../analytics.js';
 import { getSettings, updateSettings } from '../settings.js';
 import { adminRoundDetails, applyWinnerToCurrentRound, clearWinnerOverride, startRoundNow } from '../engine.js';
+import { AUTO_BOT_LIMIT } from '../bots.js';
 import {
   adjustBalance,
   approveAgentWithdrawal,
@@ -595,7 +596,23 @@ router.put(
     const body = req.body || {};
     const patch = {};
     if (body.stake !== undefined) patch.stake = String(Math.round(parsePositive(body.stake, 'stake', { min: 1, max: 100000 }) * 100));
-    if (body.botCount !== undefined) patch.botCount = String(Math.round(parsePositive(body.botCount, 'bot count', { min: 0, max: 50 })));
+    const botAuto = body.botAuto !== undefined
+      ? Boolean(body.botAuto)
+      : String(getSettings().botAuto ?? '1') !== '0';
+    if (body.botAuto !== undefined) patch.botAuto = botAuto ? '1' : '0';
+    if (body.botCount !== undefined) {
+      const raw = Number(body.botCount);
+      if (botAuto && raw > AUTO_BOT_LIMIT) {
+        throw new AppError(`Automatic bot count cannot exceed ${AUTO_BOT_LIMIT}. Switch to manual for a higher exact count.`);
+      }
+      patch.botCount = String(Math.round(parsePositive(body.botCount, 'bot count', {
+        min: 0,
+        max: botAuto ? AUTO_BOT_LIMIT : Number.MAX_SAFE_INTEGER,
+      })));
+    } else if (body.botAuto !== undefined && botAuto) {
+      // Switching a large manual count back to auto must respect the auto ceiling.
+      patch.botCount = String(Math.min(AUTO_BOT_LIMIT, Math.max(0, Number(getSettings().botCount) || 0)));
+    }
     if (body.waitSeconds !== undefined) patch.waitSeconds = String(Math.round(parsePositive(body.waitSeconds, 'wait time', { min: 5, max: 300 })));
     if (body.callIntervalMs !== undefined) patch.callIntervalMs = String(Math.round(parsePositive(body.callIntervalMs, 'call interval', { min: 1000, max: 30000 })));
     if (body.roundEndDelayMs !== undefined) patch.roundEndDelayMs = String(Math.round(parsePositive(body.roundEndDelayMs, 'round end delay', { min: 2000, max: 60000 })));
@@ -604,10 +621,6 @@ router.put(
     if (body.voiceEnabled !== undefined) patch.voiceEnabled = body.voiceEnabled ? '1' : '0';
     if (body.minWithdraw !== undefined) patch.minWithdraw = String(Math.round(parsePositive(body.minWithdraw, 'minimum withdrawal', { min: 1, max: 100000 }) * 100));
     if (body.maxAutoVerify !== undefined) patch.maxAutoVerify = String(Math.round(parsePositive(body.maxAutoVerify, 'auto verify limit', { min: 1, max: 1000000 }) * 100));
-    if (body.agentPer20Bonus !== undefined) patch.agentPer20Bonus = String(Math.round(parsePositive(body.agentPer20Bonus, 'deposit bonus', { min: 0, max: 1000 }) * 100));
-    if (body.agentActivityBonus !== undefined) patch.agentActivityBonus = String(Math.round(parsePositive(body.agentActivityBonus, 'activity bonus', { min: 0, max: 1000 }) * 100));
-    if (body.agentActivityThreshold !== undefined) patch.agentActivityThreshold = String(Math.round(parsePositive(body.agentActivityThreshold, 'activity threshold', { min: 1, max: 100 })));
-    if (body.agentGameplayCommissionRate !== undefined) patch.agentGameplayCommissionRate = String(parsePositive(body.agentGameplayCommissionRate, 'gameplay commission', { min: 0, max: 1 }));
     if (body.agentMinWithdraw !== undefined) patch.agentMinWithdraw = String(Math.round(parsePositive(body.agentMinWithdraw, 'agent minimum withdrawal', { min: 1, max: 100000 }) * 100));
     if (body.receiptAllowed !== undefined) patch.receiptAllowed = body.receiptAllowed ? '1' : '0';
     if (body.smsAllowed !== undefined) patch.smsAllowed = body.smsAllowed ? '1' : '0';

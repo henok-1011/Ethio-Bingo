@@ -17,9 +17,11 @@ const TABS = [
 ];
 
 const EARN_LABEL = {
-  deposit_bonus: 'Deposit bonus',
-  activity_bonus: '3-active-users bonus',
-  gameplay_commission: 'Gameplay commission',
+  card_purchase_commission: 'Card purchase commission',
+  card_purchase_reversal: 'Card refund reversal',
+  deposit_bonus: 'Deposit bonus (legacy)',
+  activity_bonus: 'Activity bonus (legacy)',
+  gameplay_commission: 'Gameplay commission (legacy)',
   withdrawal: 'Withdrawal',
   adjustment: 'Adjustment',
 };
@@ -256,11 +258,9 @@ export default function AgentApp() {
                   <small>{pending ? 'Awaiting admin approval' : 'No request pending'}</small>
                 </div>
                 <div className="stat-card">
-                  <span>Activity bonus</span>
-                  <strong>{agent.activityBonusPaid ? 'Paid' : 'Not yet'}</strong>
-                  <small>
-                    {agent.activeReferralCount}/{config.activityThreshold} active users needed
-                  </small>
+                  <span>Per card purchase</span>
+                  <strong>{etb(config.cardCommission)} ETB</strong>
+                  <small>Only when a referred player buys a card</small>
                 </div>
               </div>
 
@@ -276,8 +276,8 @@ export default function AgentApp() {
                   </button>
                 </div>
                 <p className="fine-print">
-                  Attribution is permanent: a player who joins with your link stays linked to you for all deposits and
-                  gameplay commissions.
+                  Attribution is permanent. You earn {etb(config.cardCommission)} ETB only when a referred player
+                  successfully buys a card; if that card is refunded, the commission is reversed.
                 </p>
               </section>
 
@@ -287,16 +287,11 @@ export default function AgentApp() {
                 </div>
                 <div className="rules-grid">
                   <div>
-                    <span className="rule-amount">{etb(config.per20Bonus)} ETB</span>
-                    <p>For every 20 ETB deposited by a referred player (rounded down).</p>
-                  </div>
-                  <div>
-                    <span className="rule-amount">{etb(config.activityBonus)} ETB</span>
-                    <p>One-time bonus when {config.activityThreshold} of your referrals have played a game.</p>
-                  </div>
-                  <div>
-                    <span className="rule-amount">{config.gameplayRate * 100}%</span>
-                    <p>Of the platform fee from every stake placed by your referred players.</p>
+                    <span className="rule-amount">{etb(config.cardCommission)} ETB</span>
+                    <p>
+                      For each card a referred player buys successfully. No deposit, activity, or other commission
+                      is paid. A refunded card reverses its commission.
+                    </p>
                   </div>
                 </div>
               </section>
@@ -515,11 +510,10 @@ export default function AgentApp() {
                   <em>75-ball · real ETB prizes</em>
                 </div>
                 <div>
-                  <h4>Story / banner text</h4>
-                  <p className="muted small">
-                    Use your referral link in every post. Players who sign up through it are permanently linked to your
-                    agent account — you earn on all their deposits and gameplay.
-                  </p>
+                  <h4>Story / banner text</h4>                    <p className="muted small">
+                      Use your referral link in every post. Players who sign up through it are permanently linked to your
+                      agent account — you earn {etb(config.cardCommission)} ETB each time they buy a card.
+                    </p>
                   <button type="button" className="link-btn" onClick={() => copyText(agent.referralLink)}>
                     Copy link only
                   </button>

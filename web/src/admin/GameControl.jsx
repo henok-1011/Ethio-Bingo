@@ -10,6 +10,7 @@ function toForm(settings) {
   return {
     stake: Number(settings.stake) / 100,
     botCount: Number(settings.botCount),
+    botAuto: settings.botAuto !== '0',
     waitSeconds: Number(settings.waitSeconds),
     callIntervalMs: Number(settings.callIntervalMs),
     roundEndDelayMs: Number(settings.roundEndDelayMs),
@@ -18,10 +19,6 @@ function toForm(settings) {
     voiceEnabled: settings.voiceEnabled !== '0',
     minWithdraw: Number(settings.minWithdraw) / 100,
     maxAutoVerify: Number(settings.maxAutoVerify) / 100,
-    agentPer20Bonus: Number(settings.agentPer20Bonus) / 100,
-    agentActivityBonus: Number(settings.agentActivityBonus) / 100,
-    agentActivityThreshold: Number(settings.agentActivityThreshold),
-    agentGameplayCommissionRate: Number(settings.agentGameplayCommissionRate) * 100,
     agentMinWithdraw: Number(settings.agentMinWithdraw) / 100,
   };
 }
@@ -30,7 +27,6 @@ function toPayload(form) {
   return {
     ...form,
     platformFeeRate: Number(form.platformFeeRate) / 100,
-    agentGameplayCommissionRate: Number(form.agentGameplayCommissionRate) / 100,
   };
 }
 
@@ -89,6 +85,16 @@ export default function GameControl({ token }) {
   const set = (key) => (event) => {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const setBotAuto = (event) => {
+    const botAuto = event.target.checked;
+    setForm((prev) => ({
+      ...prev,
+      botAuto,
+      // Auto mode has a hard ceiling of 50; manual mode keeps the exact value.
+      botCount: botAuto ? Math.min(50, Math.max(0, Number(prev.botCount) || 0)) : prev.botCount,
+    }));
   };
 
   async function saveSettings(event) {
@@ -392,10 +398,26 @@ export default function GameControl({ token }) {
                 <input type="number" min="1" value={form.stake} onChange={set('stake')} />
               </label>
               <label className="field">
-                <span>Auto table baseline (0 = no bots)</span>
-                <input type="number" min="0" max="50" value={form.botCount} onChange={set('botCount')} />
+                <span>{form.botAuto ? 'Auto table baseline (0 = no bots)' : 'Exact bot count (manual)'}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  max={form.botAuto ? 50 : undefined}
+                  value={form.botCount}
+                  onChange={set('botCount')}
+                />
               </label>
             </div>
+            <label className="check">
+              <input type="checkbox" checked={form.botAuto} onChange={setBotAuto} />
+              Auto-adjust bot count (maximum 50)
+            </label>
+            <p className="fine-print">
+              {form.botAuto
+                ? 'Auto mode varies the baseline each round and keeps the table at or below 50 bots.'
+                : 'Manual mode adds exactly the number entered, with no 50-bot cap. Real players join in addition to the bots.'}
+            </p>
             <div className="field-row">
               <label className="field">
                 <span>Waiting time (seconds)</span>
@@ -451,7 +473,9 @@ export default function GameControl({ token }) {
               {saving ? 'Saving…' : 'Save game settings'}
             </button>
             <p className="fine-print">
-              Table size changes every round. Real cards replace bots one-for-one while players are buying.
+              {form.botAuto
+                ? 'Table size changes every round. Real cards replace bots one-for-one while players are buying.'
+                : 'Manual table size is fixed for the round; buying a card does not remove a bot.'}
             </p>
           </form>
         </section>
@@ -461,46 +485,18 @@ export default function GameControl({ token }) {
             <h3>Agent commission settings</h3>
           </div>
           <form className="settings-form" onSubmit={saveSettings}>
+            <div className="notice">
+              Fixed commission: <strong>0.50 ETB</strong> for every successful card purchase by a referred player.
+              No deposit, activity, or gameplay commission is paid. Deselecting or refunding a card reverses its
+              0.50 ETB commission.
+            </div>
             <label className="field">
-              <span>Deposit bonus — ETB per 20 ETB deposited</span>
-              <input type="number" step="0.01" min="0" value={form.agentPer20Bonus} onChange={set('agentPer20Bonus')} />
+              <span>Min agent withdrawal (ETB)</span>
+              <input type="number" min="1" value={form.agentMinWithdraw} onChange={set('agentMinWithdraw')} />
             </label>
-            <div className="field-row">
-              <label className="field">
-                <span>Activity bonus (ETB, one-time)</span>
-                <input type="number" step="0.01" min="0" value={form.agentActivityBonus} onChange={set('agentActivityBonus')} />
-              </label>
-              <label className="field">
-                <span>Active referrals required</span>
-                <input type="number" min="1" value={form.agentActivityThreshold} onChange={set('agentActivityThreshold')} />
-              </label>
-            </div>
-            <div className="field-row">
-              <label className="field">
-                <span>Gameplay commission (% of platform fee)</span>
-                <input
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  max="100"
-                  value={form.agentGameplayCommissionRate}
-                  onChange={set('agentGameplayCommissionRate')}
-                />
-              </label>
-              <label className="field">
-                <span>Min agent withdrawal (ETB)</span>
-                <input type="number" min="1" value={form.agentMinWithdraw} onChange={set('agentMinWithdraw')} />
-              </label>
-            </div>
             <button type="submit" className="btn primary" disabled={saving}>
               {saving ? 'Saving…' : 'Save commission settings'}
             </button>
-            <p className="fine-print">
-              Example: a 20 ETB deposit pays {etb(Number(form.agentPer20Bonus) * 100)} ETB once verified. A 20 ETB stake at{' '}
-              {form.platformFeeRate}% fee pays{' '}
-              {etb(Number(form.stake) * 100 * (Number(form.platformFeeRate) / 100) * (Number(form.agentGameplayCommissionRate) / 100))} ETB
-              gameplay commission.
-            </p>
           </form>
         </section>
       </div>

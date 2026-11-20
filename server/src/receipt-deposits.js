@@ -2,7 +2,6 @@ import { prisma } from './db.js';
 import { getSettings } from './settings.js';
 import { AppError } from './util.js';
 import { emitToUser } from './realtime.js';
-import { onDepositVerified } from './agents.js';
 import { hashReceiptLink, verifyReceiptLink } from './receipts.js';
 
 const RETRY_MAX = Math.max(1, Number(process.env.RECEIPT_RETRY_MAX || 5));
@@ -131,12 +130,6 @@ export async function verifyReceiptDeposit(user, rawInput) {
         ? `We could not verify this receipt automatically (${reason}). It was sent to admin review.`
         : 'Your payment was submitted for manual review.',
     };
-  }
-
-  try {
-    await onDepositVerified(user.id, amount);
-  } catch (err) {
-    console.error('[deposits] agent commission failed', err);
   }
 
   const updatedUser = await prisma.user.findUnique({
@@ -276,11 +269,6 @@ export async function retryPendingReceiptDeposits({ limit = 10, fetchImpl, now =
     if (!credited) continue;
     result.credited += 1;
 
-    try {
-      await onDepositVerified(deposit.userId, amount);
-    } catch (err) {
-      console.error('[deposits] agent commission failed', err);
-    }
     const user = await prisma.user.findUnique({
       where: { id: deposit.userId },
       select: { balance: true },

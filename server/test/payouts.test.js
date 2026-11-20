@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computePayout, settleRound, totalRealStakes } from '../src/payouts.js';
+import { computePayout, settleRound, totalPrizeStakes, totalRealStakes } from '../src/payouts.js';
 import {
   cardHasBingo,
   completedPatterns,
@@ -50,13 +50,40 @@ test('odd pools round down so the platform never pays more than it took', () => 
   assert.ok(result.share * 3 <= result.pool);
 });
 
-test('only real stakes count towards the pot', () => {
+test('bot seats fund the prize pot but not the real cash total', () => {
   const players = [
-    { isBot: false, paidStake: 1000 },
-    { isBot: true, paidStake: 0 },
-    { isBot: false, paidStake: 1000 },
+    { isBot: false, paidStake: 1000, cards: [{}] },
+    { isBot: true, paidStake: 0, cards: [{}] },
+    { isBot: true, paidStake: 0, cards: [{}] },
+    { isBot: false, paidStake: 2000, cards: [{}, {}] },
   ];
-  assert.equal(totalRealStakes(players), 2000);
+  assert.equal(totalRealStakes(players), 3000);
+  assert.equal(totalPrizeStakes(players, 1000), 5000);
+});
+
+test('a bot-only win settles without paying any cash', () => {
+  // 4 real stakes plus 2 bot seats; the bot wins and no real player is paid.
+  const result = settleRound({
+    stakes: 6000,
+    cashStakes: 4000,
+    platformFeeRate: 0.2,
+    realWinnerCount: 0,
+  });
+  assert.equal(result.pool, 0);
+  assert.equal(result.share, 0);
+  assert.equal(result.platformFee, 4000);
+});
+
+test('real winners can receive a bot-funded pot without a negative fee', () => {
+  const result = settleRound({
+    stakes: 6000,
+    cashStakes: 4000,
+    platformFeeRate: 0.2,
+    realWinnerCount: 1,
+  });
+  assert.equal(result.pool, 4800);
+  assert.equal(result.share, 4800);
+  assert.equal(result.platformFee, 0);
 });
 
 test('a generated card has 12 ways to win and a free centre', () => {

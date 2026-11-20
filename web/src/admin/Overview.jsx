@@ -56,7 +56,7 @@ export default function Overview({ token, onNavigate }) {
           hint="Fees plus stakes retained when no real winner"
           tone="green"
         />
-        <Stat label="Agent commissions" value={money(t.agentCommissions)} hint={`Includes ${money(t.referralBonuses)} referral bonuses`} />
+        <Stat label="Agent commissions" value={money(t.agentCommissions)} hint="0.50 ETB per referred card purchase" />
         <Stat label="Net revenue" value={money(t.netRevenue)} hint="Revenue − agent commissions" tone="green" />
         <Stat label="Prize payouts" value={money(t.winPayouts)} hint="Paid to players" />
         <Stat label="Players" value={t.players.toLocaleString()} hint={`+${t.newUsersWeek} this week`} />
@@ -121,7 +121,7 @@ export default function Overview({ token, onNavigate }) {
       </div>
 
       <p className="muted small">
-        All amounts are in ETB. Net revenue deducts agent commissions and referral bonuses from platform revenue.
+        All amounts are in ETB. Net revenue deducts agent commissions from platform revenue.
       </p>
     </div>
   );

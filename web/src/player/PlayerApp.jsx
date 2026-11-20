@@ -165,6 +165,9 @@ export default function PlayerApp() {
       } else {
         toast('ዙሩ አልቋል። ቀጣዩ ዙር እየተጀመረ ነው…');
       }
+      // The server normally sends a balance event first, but refresh here too
+      // so a lost socket event cannot leave the wallet showing the old amount.
+      refreshMe();
       api('/api/game/state', { token }).then((state) => setYou(state.you || null)).catch(() => {});
     });
     return () => socket.disconnect();
@@ -172,6 +175,7 @@ export default function PlayerApp() {
 
   const navigate = (next) => {
     setView(next);
+    if (next === 'wallet' || next === 'withdraw') refreshMe();
     haptic('light');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -249,6 +253,9 @@ export default function PlayerApp() {
         body: { cards: [slot] },
       });
       if (result.you) setYou(result.you);
+      if (result.prizePool !== undefined) {
+        setGame((prev) => (prev ? { ...prev, prizePool: result.prizePool } : prev));
+      }
       haptic('success');
       await refreshMe();
       return true;
@@ -271,6 +278,9 @@ export default function PlayerApp() {
         body: { card: slot },
       });
       setYou(result.you || null);
+      if (result.prizePool !== undefined) {
+        setGame((prev) => (prev ? { ...prev, prizePool: result.prizePool } : prev));
+      }
       haptic('light');
       await refreshMe();
       return true;

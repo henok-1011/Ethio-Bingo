@@ -4,6 +4,7 @@ import { requireStaff } from '../auth.js';
 import { asyncHandler, AppError, maskName } from '../util.js';
 import { getSettings } from '../settings.js';
 import { BANKS, requestAgentWithdrawal } from '../wallet.js';
+import { AGENT_CARD_COMMISSION_SANTIM } from '../agents.js';
 import { referralLinkFor } from './auth.js';
 
 const router = Router();
@@ -42,7 +43,6 @@ router.get(
         commissionBalance: agent.commissionBalance,
         totalEarned: agent.totalEarned,
         activeReferralCount: agent.activeReferralCount,
-        activityBonusPaid: agent.activityBonusPaid,
         isActive: agent.isActive,
       },
       stats: {
@@ -52,11 +52,7 @@ router.get(
       },
       config: {
         minWithdraw: Number(settings.agentMinWithdraw),
-        per20Bonus: Number(settings.agentPer20Bonus),
-        activityBonus: Number(settings.agentActivityBonus),
-        activityThreshold: Number(settings.agentActivityThreshold),
-        gameplayRate: Number(settings.agentGameplayCommissionRate),
-        platformFeeRate: Number(settings.platformFeeRate),
+        cardCommission: AGENT_CARD_COMMISSION_SANTIM,
         banks: BANKS,
       },
     });

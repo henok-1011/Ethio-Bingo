@@ -206,6 +206,11 @@ code {
   color: var(--red);
   background: rgba(248, 113, 113, 0.12);
 }
+.status-dot.reversed {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
+  text-decoration: line-through;
+}
 .status-dot.waiting {
   color: var(--blue);
   background: rgba(96, 165, 250, 0.12);
@@ -3813,17 +3818,6 @@ td strong {
   opacity: 1;
   cursor: default;
 }
-.jo-game .bingo-cell.available {
-  background: rgba(0, 229, 255, 0.16);
-  color: #bff9ff;
-  box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.75);
-  cursor: pointer;
-  animation: jo-available-pulse 1.4s ease-in-out infinite;
-}
-.jo-game .bingo-cell.available:active {
-  transform: scale(0.94);
-  background: rgba(0, 229, 255, 0.3);
-}
 .jo-game .jo-auto-label {
   font-size: 9.5px;
   line-height: 1.2;
@@ -3836,16 +3830,6 @@ td strong {
   line-height: 1.5;
   text-align: center;
 }
-@keyframes jo-available-pulse {
-  0%,
-  100% {
-    box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.55);
-  }
-  50% {
-    box-shadow: inset 0 0 0 2px rgba(0, 229, 255, 0.95);
-  }
-}
-
 /* #6 reference refresh: per-letter colors and the pre-game card picker. */
 .jo-game.selecting .jo-stats,
 .jo-game.selecting .jo-main,
@@ -4334,6 +4318,12 @@ td strong {
 .winner-prize {
   color: #0f766e;
   font-size: 14px;
+}
+.winner-pot {
+  margin-top: 4px;
+  color: #a7f3d0;
+  font-size: 12px;
+  font-weight: 600;
 }
 .winner-card-no {
   color: #1f2937;

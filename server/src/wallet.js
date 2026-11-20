@@ -3,7 +3,6 @@ import { getSettings } from './settings.js';
 import { AppError } from './util.js';
 import { parsePaymentSms } from './payments.js';
 import { emitToUser } from './realtime.js';
-import { onDepositVerified } from './agents.js';
 
 // Payment / payout destinations currently supported by the platform.
 // Unsupported banks and wallets have been removed from the list on purpose.
@@ -92,7 +91,6 @@ export async function verifyDeposit(user, rawSms, expectedAmountSantim = null) {
     prisma.deposit.update({ where: { id: deposit.id }, data: { status: 'VERIFIED', verifiedAt: new Date() } }),
   ]);
 
-  await onDepositVerified(user.id, amount);
   const balance = await pushBalance(user.id);
 
   return {
@@ -137,7 +135,6 @@ export async function approveDeposit(depositId, staffId, amountOverride = null) 
     }),
   ]);
 
-  await onDepositVerified(deposit.userId, amount);
   await pushBalance(deposit.userId);
   return { ok: true, amount };
 }

@@ -8,6 +8,7 @@ import { prisma } from './db.js';
 export const DEFAULT_SETTINGS = {
   stake: '2000', // 20 ETB entry fee
   botCount: '8',
+  botAuto: '1', // auto-adjust bots (max 50); manual uses botCount exactly with no cap
   waitSeconds: '30', // card selection window
   callIntervalMs: '3000',
   roundEndDelayMs: '8000',
@@ -16,10 +17,6 @@ export const DEFAULT_SETTINGS = {
   voiceEnabled: 'true',
   minWithdraw: '5000', // 50 ETB
   maxAutoVerify: '500000', // 5,000 ETB
-  agentPer20Bonus: '100', // 1 ETB for every 20 ETB deposited
-  agentActivityBonus: '300', // 3 ETB one-time bonus
-  agentActivityThreshold: '3',
-  agentGameplayCommissionRate: '0.05', // 5% of platform fee from referred users
   agentMinWithdraw: '5000', // 50 ETB
   nextWinner: 'none', // JSON override applied to the next round
   announcementText: '', // latest in-app announcement shown to players

@@ -122,12 +122,17 @@ npm start          # http://localhost:4000
   `callIntervalMs`) → `ENDED` (result + next-round countdown).
 - The server owns the shuffled deck, cards, calls and validation. A false claim blocks that player
   for the rest of the round; repeated claims return an error.
-- Payout: real stakes − platform fee = prize pool. All real players with at least two completed
+- Payout: every occupied seat (real cards and bot seats) contributes the stake; subtract the
+  platform fee and the remainder is the prize pool. All real players with at least two completed
   patterns when the round ends split the pool equally (cents are floored). A bot may trigger the end
   of the round, but **bots never receive real money** — only real winners are credited.
-- Bots join each round per admin setting (0–50), with random names and cards. They claim with a
-  1.5–4 s human-like delay. With a forced human winner, bots are held until that player claims (or
-  the deck runs out).
+- Bots join each round per admin setting with random names and cards. Auto mode varies the
+  baseline and never exceeds 50 bots; manual mode uses the exact count entered with no 50-bot cap
+  and keeps that count for the round. They claim with a 1.5–4 s human-like delay. With a forced
+  human winner, bots are held until that player claims (or the deck runs out), and the draw is
+  biased toward that player's card while avoiding numbers that would give another real player a
+  second completed pattern when possible. The final override still decides the winner if the
+  round ends first.
 - Card numbers are **1–432**. A player picks specific numbers during the 30-second waiting window
   and each pick costs 20 ETB (the configured stake), charged immediately and atomically. A number
   can only be bought once per round by anyone, and a player may buy as many numbers as they can
@@ -196,7 +201,7 @@ status, transaction reference and receiving account. Verification rules:
 - unreadable pages, CBE PDF receipts, account mismatches and amounts above the threshold create a
   `PENDING_REVIEW` deposit, approved or rejected in **Admin → Withdrawals → Deposit review** (the
   admin sees the receipt link and can enter the amount);
-- every credit calls the agent commission engine.
+- deposits do not pay agent commission; only successful card purchases do.
 
 Telebirr's receipt page is sometimes reachable only from Ethiopian networks and CBE's public API
 headers are undocumented; both failures fall back to manual review rather than crediting money, and
@@ -212,22 +217,23 @@ Withdrawals are always manual: request reserves the balance, admin sends money, 
 ## 6. Agent referral & commissions
 
 Attribution is permanent (`users.referredByAgentId` + `referrals` row) and self-referral is blocked.
-Rates are editable in **Admin → Game Control → Agent commission settings**:
+The only agent commission is a fixed **0.50 ETB for every successful card purchase** by a referred
+player. Deposits, activity levels, gameplay stakes and all other events pay no commission. If a
+card is deselected or refunded in the waiting window, its 0.50 ETB commission is reversed.
 
 | Event | Formula | Default |
 |-------|---------|---------|
-| Deposit bonus | `floor(depositSantim / 2000) * agentPer20Bonus` | 1 ETB per 20 ETB, all deposits |
-| Activity bonus | once, when `activeReferralCount >= agentActivityThreshold` | 3 ETB at 3 active users |
-| Gameplay commission | `stake * platformFeeRate * agentGameplayCommissionRate` | 5% of platform fee |
+| Card purchase commission | `cardCount * 50 santim` | 0.50 ETB per card |
 | Minimum agent withdrawal | `agentMinWithdraw` | 50 ETB |
 
-A referred user becomes “active” on their first paid stake. Every credit lands in
-`agent_transactions`, increases `commissionBalance`/`totalEarned`, and is visible to the agent and
-the admin. Agent withdrawals use the same reserve → approve/reject flow as player withdrawals.
+A referred user becomes “active” on their first paid stake. Each card purchase creates a separate
+`agent_transactions` row and increases `commissionBalance`/`totalEarned`; refunds create a reversal
+row and reduce both balances. The agent and admin can see the full ledger. Agent withdrawals use the
+same reserve → approve/reject flow as player withdrawals.
 
 **Agent dashboard (`/agent`):** referral link with copy button, overview KPIs, referral table with
-masked names and per-user deposits/games/commission, full commission ledger, withdrawal form and
-history, marketing messages.
+masked invited players and their join/activity/commission records, full commission ledger, withdrawal
+form and history, marketing messages.
 
 **Admin agent tools:** promote any user (creates agent login + permanent code), list performance,
 enable/disable, adjust commission balance with reason, review pending agent withdrawals, inspect

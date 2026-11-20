@@ -3,11 +3,10 @@ import { etb } from '../format.js';
 import Logo from '../components/Logo.jsx';
 
 export default function TopBar({ me, game, you, onRefresh, refreshing, view = 'game', onNavigate }) {
-  const feeRate = Math.min(1, Math.max(0, Number(me?.config?.platformFeeRate ?? 0.2)));
   const players = Number(game?.playersCount || 0);
   const stakeSantim = Number(game?.stake || 0);
-  // Derash = what players paid minus the platform (system) fee.
-  const derash = Math.floor(players * stakeSantim * (1 - feeRate));
+  // The server pot includes both real card seats and bot seats.
+  const derash = Number(game?.prizePool || 0);
   const calledCount = game?.drawNumber ?? game?.calledNumbers?.length ?? 0;
 
   return (

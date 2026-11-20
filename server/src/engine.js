@@ -4,8 +4,15 @@ import { cardHasBingo, generateCard, shuffleDeck, winningLineFor, winningPattern
 import { emptyMarks, markCard, markCalledNumbers, markedSet, unmarkCard } from './marking.js';
 import { broadcast, broadcastState, emitToUser } from './realtime.js';
 import { AppError } from './util.js';
-import { onStake } from './agents.js';
-import { computePayout, settleRound, totalRealStakes } from './payouts.js';
+import {
+  creditCardPurchaseCommissions,
+  markReferralActive,
+  reverseCardPurchaseCommission,
+  reverseCardPurchaseCommissionsForGame,
+} from './agents.js';
+import { computePayout, settleRound, totalPrizeStakes, totalRealStakes } from './payouts.js';
+import { botSeatTarget, isBotAuto } from './bots.js';
+import { chooseForcedNumber } from './forced-draw.js';
 
 // Cards are numbered 1..432. Every number is a distinct card and a number
 // can only be bought once per round.
@@ -52,19 +59,6 @@ function randomPhone() {
   return `+2519${Math.floor(10_000_000 + Math.random() * 89_999_999)}`;
 }
 
-/**
- * How many card seats this round should show. botCount is the admin baseline;
- * the table size changes every round and real card purchases replace bots
- * one-for-one while the round is waiting.
- */
-function seatTargetFor(settings) {
-  const base = Math.max(0, Math.min(50, Math.floor(Number(settings.botCount) || 0)));
-  if (base <= 0) return 0;
-  const min = Math.max(4, base - 2);
-  const max = Math.max(min, Math.min(40, base + 8));
-  return min + Math.floor(Math.random() * (max - min + 1));
-}
-
 /** Drops bots so every real card bought takes one seat at the table. */
 function removeBotsForRealCards(round, count) {
   if (!round.seatTarget || count <= 0) return [];
@@ -87,6 +81,8 @@ function removeBotsForRealCards(round, count) {
 }
 
 async function pruneBotsForRealCards(round) {
+  // Manual mode keeps exactly the number the admin entered.
+  if (!round.botAuto) return;
   const realCards = round.players
     .filter((p) => !p.isBot)
     .reduce((sum, p) => sum + (p.cards?.length || 0), 0);
@@ -145,7 +141,7 @@ function cardForSlot(round, slot) {
 
 function prizePoolFor(round) {
   return computePayout({
-    stakes: totalRealStakes(round.players),
+    stakes: totalPrizeStakes(round.players, round.stake),
     platformFeeRate: getSettings().platformFeeRate,
     realWinnerCount: 0,
   }).pool;
@@ -153,6 +149,17 @@ function prizePoolFor(round) {
 
 function playerHasBingo(player) {
   return cardHasBingo(player.cards, markedSet(ensureMarks(player)));
+}
+
+function forcedPlayerFor(round) {
+  if (!round?.forcedWinner) return null;
+  return (
+    round.players.find((player) =>
+      round.forcedWinner.type === 'user'
+        ? player.userId === round.forcedWinner.userId
+        : player.isBot && player.forced,
+    ) || null
+  );
 }
 
 export function getPublicState() {
@@ -253,6 +260,9 @@ async function refundStaleRounds() {
           }),
         ]);
         emitToUser(p.userId, 'balance', { refreshed: true });
+        await reverseCardPurchaseCommissionsForGame(game.id, p.userId).catch((err) =>
+          console.error('[engine] commission reversal failed:', err.message),
+        );
       }
     }
     await prisma.game.update({
@@ -290,7 +300,8 @@ async function createRound() {
     const settings = getSettings();
     const stake = Math.max(100, Number(settings.stake));
     const forced = await resolveNextWinner();
-    const botCount = Math.max(seatTargetFor(settings), forced?.type === 'bot' ? 1 : 0);
+    const botAuto = isBotAuto(settings);
+    const botCount = Math.max(botSeatTarget(settings), forced?.type === 'bot' ? 1 : 0);
 
     const game = await prisma.game.create({
       data: {
@@ -307,7 +318,8 @@ async function createRound() {
       status: 'WAITING',
       stake,
       seatTarget: botCount,
-      botFloor: botCount > 2 ? Math.max(1, Math.round(botCount * 0.15)) : 0,
+      botAuto,
+      botFloor: botAuto && botCount > 2 ? Math.max(1, Math.round(botCount * 0.15)) : 0,
       removedBotIds: [],
       seed: game.id * 2654435761,
       bots: [],
@@ -362,8 +374,14 @@ async function createRound() {
       });
     }
 
+    // Bots are seats too, so the pot is known before the first real player
+    // picks. Keep the in-memory and stored values in sync for live clients.
+    round.prizePool = prizePoolFor(round);
     state.current = round;
-    await prisma.game.update({ where: { id: game.id }, data: { status: 'WAITING' } });
+    await prisma.game.update({
+      where: { id: game.id },
+      data: { status: 'WAITING', prizePool: round.prizePool },
+    });
     if (forced) await setSetting('nextWinner', 'none');
     await prisma.adminAction.create({
       data: {
@@ -446,12 +464,18 @@ async function startCalling() {
     round.players
       .filter((p) => !p.isBot && p.userId && p.paidStake > 0)
       .map((p) =>
-        onStake(p.userId, p.paidStake).catch((err) =>
-          console.error('[engine] stake commission failed:', err.message),
+        markReferralActive(p.userId).catch((err) =>
+          console.error('[engine] referral activation failed:', err.message),
         ),
       ),
   );
-  await prisma.game.update({ where: { id: round.id }, data: { status: 'CALLING', startedAt: new Date() } });
+  // Auto mode may have dropped bots while locking the table. Recompute so the
+  // pot shown to players matches the seats that are actually playing.
+  round.prizePool = prizePoolFor(round);
+  await prisma.game.update({
+    where: { id: round.id },
+    data: { status: 'CALLING', startedAt: new Date(), prizePool: round.prizePool },
+  });
   broadcast('game:started', { roundId: round.id });
   broadcastAll();
 }
@@ -459,7 +483,21 @@ async function startCalling() {
 async function callNextNumber() {
   const round = state.current;
   if (!round || round.status !== 'CALLING') return;
-  const number = round.deck.pop();
+
+  // A forced winner gets a deck biased toward their card. Bots are not
+  // treated as blockers here because scheduleBotClaims holds them back.
+  let number = chooseForcedNumber({
+    deck: round.deck,
+    called: round.called,
+    players: round.players,
+    forcedPlayer: forcedPlayerFor(round),
+  });
+  if (number != null) {
+    const index = round.deck.indexOf(number);
+    if (index >= 0) round.deck.splice(index, 1);
+    else number = null;
+  }
+  if (number == null) number = round.deck.pop();
   if (!number) {
     await finishRound(null, 'exhausted');
     return;
@@ -517,14 +555,20 @@ async function finishRound(triggerPlayer, reason) {
   }
 
   const realWinners = winners.filter((p) => !p.isBot);
+  const realStakes = totalRealStakes(round.players);
   const { pool, platformFee, share } = settleRound({
-    stakes: totalRealStakes(round.players),
+    stakes: totalPrizeStakes(round.players, round.stake),
+    cashStakes: realStakes,
     platformFeeRate: settings.platformFeeRate,
     realWinnerCount: realWinners.length,
   });
+  // This map is the single source of truth for the amount shown on the
+  // winner card, stored on the player row, credited to the wallet, and
+  // written to the transaction history.
+  const winnerPayouts = new Map(realWinners.map((p) => [p.id, share]));
 
-  // Bots hold seats, never money. A bot winner gets no prize and the stakes
-  // stay with the platform; only real winners are paid from the real pool.
+  // Bots are counted in the prize calculation but never own money. A bot
+  // winner gets no wallet credit or transaction; only real winners are paid.
 
   // Real winners show their cash prize. A bot win still shows the winning
   // card and masked phone, but no amount: no money moves for a bot.
@@ -534,7 +578,7 @@ async function finishRound(triggerPlayer, reason) {
       name: p.name,
       phone4: phone4From(p.phone),
       phoneMasked: maskPhone(p.phone),
-      amount: p.isBot ? 0 : share,
+      amount: p.isBot ? 0 : winnerPayouts.get(p.id) || 0,
       cardNumber: winning?.cardNumber || 1,
       card: winning?.card || null,
       line: winning?.line || null,
@@ -542,8 +586,7 @@ async function finishRound(triggerPlayer, reason) {
     };
   });
   round.winnerIds = winners.map((p) => p.id);
-  round.payouts = {};
-  for (const p of winners) if (!p.isBot) round.payouts[p.id] = share;
+  round.payouts = Object.fromEntries(winnerPayouts);
   round.prizePool = pool;
   round.nextRoundAt = Date.now() + Math.max(2000, Number(settings.roundEndDelayMs));
 
@@ -561,21 +604,22 @@ async function finishRound(triggerPlayer, reason) {
 
     for (const player of round.players) {
       const isWinner = realWinners.includes(player);
+      const payout = isWinner ? winnerPayouts.get(player.id) || 0 : 0;
       await tx.gamePlayer.update({
         where: { id: player.id },
         data: {
           hasBingo: playerHasBingo(player, round),
           isWinner,
-          winAmount: isWinner ? share : 0,
+          winAmount: payout,
         },
       });
-      if (isWinner && player.userId && share > 0) {
-        await tx.user.update({ where: { id: player.userId }, data: { balance: { increment: share } } });
+      if (isWinner && player.userId && payout > 0) {
+        await tx.user.update({ where: { id: player.userId }, data: { balance: { increment: payout } } });
         await tx.transaction.create({
           data: {
             userId: player.userId,
             type: 'win',
-            amount: share,
+            amount: payout,
             status: 'completed',
             reference: `game:${round.id}`,
           },
@@ -709,6 +753,7 @@ export async function joinRound(user, selection = []) {
 
     const generated = slots.map((slot) => cardForSlot(round, slot));
     let player = round.players.find((p) => p.userId === user.id);
+    const previousCardCount = player ? (player.cards?.length || 0) : 0;
 
     if (player) {
       player.cards = [...player.cards, ...generated];
@@ -766,6 +811,16 @@ export async function joinRound(user, selection = []) {
     round.prizePool = prizePoolFor(round);
     await prisma.game.update({ where: { id: round.id }, data: { prizePool: round.prizePool } });
 
+    const commissionTxIds = await creditCardPurchaseCommissions({
+      user: fresh,
+      gameId: round.id,
+      slots,
+    });
+    const previousCommissionTxIds = Array.from({ length: previousCardCount }, (_, index) =>
+      Array.isArray(player.commissionTxIds) ? player.commissionTxIds[index] ?? null : null,
+    );
+    player.commissionTxIds = [...previousCommissionTxIds, ...commissionTxIds];
+
     const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { balance: true } });
     emitToUser(user.id, 'balance', { balance: updated.balance });
     emitToUser(user.id, 'you', getPlayerView(round, user.id));
@@ -777,6 +832,7 @@ export async function joinRound(user, selection = []) {
       slots: player.slots,
       spent: player.paidStake,
       balance: updated.balance,
+      prizePool: round.prizePool,
       you: getPlayerView(round, user.id),
     };
   } catch (err) {
@@ -817,6 +873,8 @@ export async function deselectCard(user, cardNumber) {
   if (!player) throw new AppError('በዚህ ዙር አይጫወቱም።');
   const cardIndex = (player.slots || []).indexOf(slot);
   if (cardIndex < 0) throw new AppError('ይህ ካርድ በምርጫዎ ውስጥ አልገኘም።');
+  const commissionTxId = (player.commissionTxIds || [])[cardIndex] || null;
+  const nextCommissionTxIds = (player.commissionTxIds || []).filter((_, index) => index !== cardIndex);
 
   state.joining.add(user.id);
   try {
@@ -826,7 +884,7 @@ export async function deselectCard(user, cardNumber) {
     const refund = Math.min(round.stake, Math.max(0, player.paidStake || 0));
     const nextPaid = Math.max(0, (player.paidStake || 0) - refund);
     const playerIndex = round.players.indexOf(player);
-    const remainingStakes = Math.max(0, totalRealStakes(round.players) - refund);
+    const remainingStakes = Math.max(0, totalPrizeStakes(round.players, round.stake) - refund);
     const nextPool = computePayout({
       stakes: remainingStakes,
       platformFeeRate: getSettings().platformFeeRate,
@@ -866,8 +924,16 @@ export async function deselectCard(user, cardNumber) {
     player.slots = nextSlots;
     player.marks = nextMarks;
     player.paidStake = nextPaid;
+    player.commissionTxIds = nextCommissionTxIds;
     if (!nextCards.length && playerIndex >= 0) round.players.splice(playerIndex, 1);
     round.prizePool = nextPool;
+
+    if (commissionTxId) {
+      await reverseCardPurchaseCommission(commissionTxId, {
+        referenceUserId: user.id,
+        note: `[game:${round.id}] Card #${slot} refunded`,
+      });
+    }
 
     const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { balance: true } });
     const view = getPlayerView(round, user.id);
@@ -875,7 +941,7 @@ export async function deselectCard(user, cardNumber) {
     emitToUser(user.id, 'you', view);
     broadcastAll();
 
-    return { ok: true, card: slot, you: view, balance: updated?.balance ?? 0 };
+    return { ok: true, card: slot, you: view, balance: updated?.balance ?? 0, prizePool: round.prizePool };
   } finally {
     state.joining.delete(user.id);
   }
