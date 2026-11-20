@@ -53,6 +53,7 @@ router.get(
       config: {
         minWithdraw: Number(settings.agentMinWithdraw),
         cardCommission: AGENT_CARD_COMMISSION_SANTIM,
+        stake: Number(settings.stake),
         banks: BANKS,
       },
     });

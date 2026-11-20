@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computePayout, settleRound, totalPrizeStakes, totalRealStakes } from '../src/payouts.js';
+import {
+  computePayout,
+  projectedPrizeStakes,
+  settleRound,
+  totalPrizeStakes,
+  totalRealStakes,
+} from '../src/payouts.js';
 import {
   cardHasBingo,
   completedPatterns,
@@ -59,6 +65,47 @@ test('bot seats fund the prize pot but not the real cash total', () => {
   ];
   assert.equal(totalRealStakes(players), 3000);
   assert.equal(totalPrizeStakes(players, 1000), 5000);
+});
+
+test('the live pot projects the bots that real cards will replace', () => {
+  const bots = Array.from({ length: 8 }, () => ({
+    isBot: true,
+    paidStake: 0,
+    cards: [{}],
+    forced: false,
+  }));
+  const real = { isBot: false, paidStake: 2000, cards: [{}] };
+  const players = [...bots, real];
+
+  // One real card replaces one bot before calling starts, so the live pot is
+  // eight seats rather than the temporary nine-seat count.
+  assert.equal(
+    projectedPrizeStakes({ players, stake: 2000, botAuto: true, botFloor: 1 }),
+    totalPrizeStakes([...bots.slice(1), real], 2000),
+  );
+  assert.equal(projectedPrizeStakes({ players, stake: 2000, botAuto: true, botFloor: 1 }), 16000);
+
+  // Deselecting the real card restores that bot and leaves the pot unchanged.
+  assert.equal(
+    projectedPrizeStakes({
+      players,
+      stake: 2000,
+      botAuto: true,
+      botFloor: 1,
+      realCardsDelta: -1,
+      realStakeDelta: -2000,
+    }),
+    16000,
+  );
+});
+
+test('manual bots stay in addition to real cards in the live pot', () => {
+  const players = [
+    { isBot: true, paidStake: 0, cards: [{}] },
+    { isBot: true, paidStake: 0, cards: [{}] },
+    { isBot: false, paidStake: 2000, cards: [{}] },
+  ];
+  assert.equal(projectedPrizeStakes({ players, stake: 2000, botAuto: false }), 6000);
 });
 
 test('a bot-only win settles without paying any cash', () => {

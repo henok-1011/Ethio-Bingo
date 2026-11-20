@@ -54,3 +54,37 @@ export function totalPrizeStakes(players, stake) {
     return sum + seatStake * cards;
   }, 0);
 }
+
+/**
+ * The pot a waiting round will actually pay once auto-mode removes the bots
+ * replaced by real cards. Without this projection the live pot counts both the
+ * bot and the real card for the same seat until kickoff, then drops.
+ */
+export function projectedPrizeStakes({
+  players = [],
+  stake,
+  botAuto = false,
+  botFloor = 0,
+  realCardsDelta = 0,
+  realStakeDelta = 0,
+} = {}) {
+  const seatStake = Math.max(0, Math.floor(Number(stake) || 0));
+  const realPlayers = (players || []).filter((p) => !p.isBot);
+  const realCards = Math.max(
+    0,
+    realPlayers.reduce((sum, p) => sum + Math.max(0, p.cards?.length || 0), 0) +
+      Math.floor(Number(realCardsDelta) || 0),
+  );
+  const realStakes = Math.max(
+    0,
+    realPlayers.reduce((sum, p) => sum + Math.max(0, Number(p.paidStake) || 0), 0) +
+      Math.floor(Number(realStakeDelta) || 0),
+  );
+  const bots = (players || []).filter((p) => p.isBot);
+  if (!botAuto) return realStakes + bots.length * seatStake;
+
+  const removable = bots.filter((p) => !p.forced).length;
+  const room = Math.max(0, bots.length - Math.max(0, Math.floor(Number(botFloor) || 0)));
+  const replaced = Math.min(realCards, room, removable);
+  return realStakes + (bots.length - replaced) * seatStake;
+}

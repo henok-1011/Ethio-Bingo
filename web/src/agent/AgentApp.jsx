@@ -129,6 +129,7 @@ export default function AgentApp() {
   const agent = data.agent;
   const config = data.config;
   const stats = data.stats;
+  const stakeLabel = etbShort(config.stake ?? 2000);
   const pending = withdrawals.find((w) => w.status === 'PENDING');
 
   async function copyLink() {
@@ -175,7 +176,7 @@ export default function AgentApp() {
 
   const marketingMessages = [
     `🎱 Ethio Bingo — play live bingo and win real ETB!\nJoin with my link: ${agent.referralLink}`,
-    `🎉 20 ETB stake, real cash prizes every round. Register with my invite link and start playing: ${agent.referralLink}`,
+    `🎉 ${stakeLabel} ETB stake, real cash prizes every round. Register with my invite link and start playing: ${agent.referralLink}`,
     `🇪🇹 ኢትዮ ቢንጎ! በቴሌግራም ላይ ቢንጎ ተጫውተው ገንዘብ ያሸንፉ። በዚህ ሊንክ ይቀላቀሉ፡ ${agent.referralLink}`,
   ];
 

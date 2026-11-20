@@ -57,7 +57,8 @@ export default function Overview({ token, onNavigate }) {
           tone="green"
         />
         <Stat label="Agent commissions" value={money(t.agentCommissions)} hint="0.50 ETB per referred card purchase" />
-        <Stat label="Net revenue" value={money(t.netRevenue)} hint="Revenue − agent commissions" tone="green" />
+        <Stat label="Agent payouts" value={money(t.agentPayouts)} hint="Commissions, bonuses and adjustments" />
+        <Stat label="Net revenue" value={money(t.netRevenue)} hint="Revenue − agent payouts" tone="green" />
         <Stat label="Prize payouts" value={money(t.winPayouts)} hint="Paid to players" />
         <Stat label="Players" value={t.players.toLocaleString()} hint={`+${t.newUsersWeek} this week`} />
         <Stat
@@ -68,7 +69,7 @@ export default function Overview({ token, onNavigate }) {
         <Stat label="Active players" value={`${data.active.daily} / ${data.active.weekly} / ${data.active.monthly}`} hint="Daily / weekly / monthly" />
         <Stat label="Rounds played" value={data.gameStats.rounds.toLocaleString()} hint={`Avg stake ${etb(data.gameStats.avgStake)} ETB`} />
         <Stat label="Biggest win" value={money(data.gameStats.biggestWin)} hint={`Avg players/round ${data.gameStats.avgPlayers.toFixed(1)}`} />
-        <Stat label="GMV (stakes)" value={money(t.gmv)} hint="Last 14 days" />
+        <Stat label="GMV (stakes)" value={money(t.gmv)} hint="All-time stakes" />
         <Stat label="Avg prize pool" value={money(data.gameStats.avgPrize)} hint="Per finished round" />
       </div>
 
@@ -114,14 +115,14 @@ export default function Overview({ token, onNavigate }) {
         <section className="panel">
           <div className="section-title">
             <h3>Money flow</h3>
-            <span className="muted small">Completed transactions</span>
+            <span className="muted small">Completed transactions · last 14 days</span>
           </div>
           <PieChart data={pie} />
         </section>
       </div>
 
       <p className="muted small">
-        All amounts are in ETB. Net revenue deducts agent commissions from platform revenue.
+        All amounts are in ETB. Net revenue deducts agent payouts from platform revenue.
       </p>
     </div>
   );

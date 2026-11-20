@@ -267,7 +267,7 @@ export default function GameControl({ token }) {
               <div>
                 <span className="muted small">Players</span>
                 <strong>
-                  {game.playersCount} cards · {game.realCount} real
+                  {game.cardsCount ?? game.playersCount} cards · {game.realCount} real
                 </strong>
               </div>
               <div>

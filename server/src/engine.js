@@ -10,7 +10,13 @@ import {
   reverseCardPurchaseCommission,
   reverseCardPurchaseCommissionsForGame,
 } from './agents.js';
-import { computePayout, settleRound, totalPrizeStakes, totalRealStakes } from './payouts.js';
+import {
+  computePayout,
+  projectedPrizeStakes,
+  settleRound,
+  totalPrizeStakes,
+  totalRealStakes,
+} from './payouts.js';
 import { botSeatTarget, isBotAuto } from './bots.js';
 import { chooseForcedNumber } from './forced-draw.js';
 
@@ -141,7 +147,12 @@ function cardForSlot(round, slot) {
 
 function prizePoolFor(round) {
   return computePayout({
-    stakes: totalPrizeStakes(round.players, round.stake),
+    stakes: projectedPrizeStakes({
+      players: round.players,
+      stake: round.stake,
+      botAuto: round.botAuto,
+      botFloor: round.botFloor,
+    }),
     platformFeeRate: getSettings().platformFeeRate,
     realWinnerCount: 0,
   }).pool;
@@ -165,7 +176,17 @@ function forcedPlayerFor(round) {
 export function getPublicState() {
   const round = state.current;
   if (!round) {
-    return { status: 'IDLE', playersCount: 0, realCount: 0, players: [], calledNumbers: [], prizePool: 0, stake: 0 };
+    return {
+      status: 'IDLE',
+      playersCount: 0,
+      cardsCount: 0,
+      playerCount: 0,
+      realCount: 0,
+      players: [],
+      calledNumbers: [],
+      prizePool: 0,
+      stake: 0,
+    };
   }
   const now = Date.now();
   const cards = [];
@@ -185,7 +206,12 @@ export function getPublicState() {
     status: round.status,
     stake: round.stake,
     prizePool: round.prizePool,
+    // `playersCount` historically meant cards and is kept for older clients.
+    // Use `playerCount` for people and `cardsCount` for card seats.
     playersCount: cards.length,
+    cardsCount: cards.length,
+    playerCount: round.players.length,
+    realCount: round.players.filter((p) => !p.isBot).length,
     players: cards,
     calledNumbers: [...round.called],
     lastCalled: round.lastCalled,
@@ -884,9 +910,15 @@ export async function deselectCard(user, cardNumber) {
     const refund = Math.min(round.stake, Math.max(0, player.paidStake || 0));
     const nextPaid = Math.max(0, (player.paidStake || 0) - refund);
     const playerIndex = round.players.indexOf(player);
-    const remainingStakes = Math.max(0, totalPrizeStakes(round.players, round.stake) - refund);
     const nextPool = computePayout({
-      stakes: remainingStakes,
+      stakes: projectedPrizeStakes({
+        players: round.players,
+        stake: round.stake,
+        botAuto: round.botAuto,
+        botFloor: round.botFloor,
+        realCardsDelta: -1,
+        realStakeDelta: -refund,
+      }),
       platformFeeRate: getSettings().platformFeeRate,
       realWinnerCount: 0,
     }).pool;

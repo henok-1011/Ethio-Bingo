@@ -304,7 +304,9 @@ export default function GameScreen({
   // round, but never receive cash. The server is the source of truth here.
   const poolDisplay = Number(game?.prizePool || 0);
   const stakeSantim = game?.stake || stake || 0;
-  const players = Number(game?.playersCount || 0);
+  const uniquePlayers = new Set((game?.players || []).map((entry) => entry.playerId)).size;
+  const players = Number(game?.playerCount ?? uniquePlayers);
+  const cardsInPlay = Number(game?.cardsCount ?? game?.playersCount ?? 0);
   const derash = poolDisplay;
   const calledCount = game?.drawNumber ?? game?.calledNumbers?.length ?? 0;
   const boardNumbers = Array.from({ length: 15 }, (_, row) =>
@@ -333,7 +335,7 @@ export default function GameScreen({
     : isWaiting
       ? `ካርድ ይምረጡ · ${mySlots.length} ተመርጧል · ${etb(spent)} ETB`
       : isCalling && you
-        ? `መግቢያ ${etb(you.spent || 0)} ETB · ሽልማት ${etb(poolDisplay)} ETB`
+        ? `ካርድ ${mySlots.length} · የወጣ ${etb(spent)} ETB · ጠቅላላ ሽልማት ${etb(poolDisplay)} ETB`
         : isCalling
           ? 'ይህን ዙር እየተመለከቱ ነው።'
           : ended
@@ -511,7 +513,7 @@ export default function GameScreen({
                   {mySlots.length} picked · {etb(spent)} ETB
                 </span>
               </div>
-              <span className="jo-select-count">{game?.playersCount || 0} cards in play</span>
+              <span className="jo-select-count">{cardsInPlay} cards in play</span>
             </div>
 
             <div className="jo-select-grid" role="group" aria-label="የካርድ ቁጥሮች 1 እስከ 432">
@@ -575,7 +577,7 @@ export default function GameScreen({
                   ? `የመምረጫ ጊዜ በ ${countdown(selectionMs)}`
                   : 'የመምረጫ ጊዜው አልቋል'}
               </h4>
-              <span>{game?.playersCount || 0} ካርድ</span>
+              <span>{cardsInPlay} ካርድ</span>
             </div>
 
             <div className="picks-summary">
@@ -597,7 +599,7 @@ export default function GameScreen({
               <div className="table-players">
                 <div className="picker-head">
                   <h4>በዚህ ዙር የሚጫወቱ</h4>
-                  <span>{game.playersCount} ካርድ</span>
+                  <span>{cardsInPlay} ካርድ</span>
                 </div>
                 <div className="table-player-list" role="list">
                   {game.players.map((entry) => {
@@ -728,7 +730,7 @@ export default function GameScreen({
                     ))}
                     <div className="bingo-card-foot">
                       <span>ካርድ #{you.slots?.[index] ?? index + 1}</span>
-                      <span className="card-win">ሽልማት {etb(poolDisplay)} ETB</span>
+                      <span className="card-win">ጠቅላላ ሽልማት {etb(poolDisplay)} ETB</span>
                     </div>
                   </div>
                 );

@@ -3,8 +3,9 @@ import { etb } from '../format.js';
 import Logo from '../components/Logo.jsx';
 
 export default function TopBar({ me, game, you, onRefresh, refreshing, view = 'game', onNavigate }) {
-  const players = Number(game?.playersCount || 0);
-  const stakeSantim = Number(game?.stake || 0);
+  const uniquePlayers = new Set((game?.players || []).map((entry) => entry.playerId)).size;
+  const players = Number(game?.playerCount ?? uniquePlayers);
+  const stakeSantim = Number(game?.stake || me?.config?.stake || 0);
   // The server pot includes both real card seats and bot seats.
   const derash = Number(game?.prizePool || 0);
   const calledCount = game?.drawNumber ?? game?.calledNumbers?.length ?? 0;
@@ -67,7 +68,7 @@ export default function TopBar({ me, game, you, onRefresh, refreshing, view = 'g
         <div className="stat">
           <span>መግቢያ ክፍያ</span>
           <strong>
-            {etb(game?.stake)} <small>ETB</small>
+            {etb(stakeSantim)} <small>ETB</small>
           </strong>
         </div>
         <div className="stat call-stat">

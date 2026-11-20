@@ -20,6 +20,7 @@ export async function adminOverview() {
   const [
     transactions,
     games,
+    allTimeTotals,
     agentTx,
     usersCount,
     newUsers,
@@ -31,7 +32,12 @@ export async function adminOverview() {
   ] = await Promise.all([
       prisma.transaction.findMany({ where: { createdAt: { gte: since }, status: 'completed' } }),
       prisma.game.findMany({ where: { createdAt: { gte: since } } }),
-      prisma.agentTransaction.findMany({ where: { createdAt: { gte: since }, status: 'completed' } }),
+      prisma.transaction.groupBy({
+        by: ['type'],
+        where: { status: 'completed' },
+        _sum: { amount: true },
+      }),
+      prisma.agentTransaction.findMany({ where: { status: 'completed' } }),
       prisma.user.count(),
       prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
       prisma.user.count({ where: phoneStatusWhere('missing') }),
@@ -43,6 +49,8 @@ export async function adminOverview() {
 
   const sum = (rows, type) =>
     rows.filter((t) => t.type === type).reduce((acc, t) => acc + t.amount, 0);
+  const totalByType = (type) =>
+    allTimeTotals.find((row) => row.type === type)?._sum.amount || 0;
 
   const allGames = await prisma.game.findMany({
     where: { status: 'ENDED' },
@@ -67,11 +75,14 @@ export async function adminOverview() {
     where: { userId: { not: null }, joinedAt: { gte: monthAgo } },
   });
 
-  const agentCommissions = agentTx
+  const cardCommissions = agentTx
+    .filter((t) => t.type === 'card_purchase_commission')
+    .reduce((acc, t) => acc + t.amount, 0);
+  const agentPayouts = agentTx
     .filter((t) => t.amount > 0)
     .reduce((acc, t) => acc + t.amount, 0);
   const referralBonuses = agentTx
-    .filter((t) => t.type === 'deposit_bonus' || t.type === 'activity_bonus')
+    .filter((t) => ['deposit_bonus', 'activity_bonus', 'gameplay_commission'].includes(t.type))
     .reduce((acc, t) => acc + t.amount, 0);
   const platformFees = allGames.reduce((acc, g) => acc + g.platformFee, 0);
 
@@ -115,14 +126,15 @@ export async function adminOverview() {
 
   return {
     totals: {
-      deposits: sum(transactions, 'deposit'),
-      withdrawals: sum(transactions, 'withdrawal'),
+      deposits: totalByType('deposit'),
+      withdrawals: totalByType('withdrawal'),
       platformFees,
-      agentCommissions,
+      agentCommissions: cardCommissions,
+      agentPayouts,
       referralBonuses,
-      netRevenue: platformFees - agentCommissions,
+      netRevenue: platformFees - agentPayouts,
       winPayouts: winAgg._sum.amount || 0,
-      gmv: sum(transactions, 'stake'),
+      gmv: totalByType('stake'),
       players: usersCount,
       newUsersWeek: newUsers,
       missingPhones,
