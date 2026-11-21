@@ -38,30 +38,105 @@ const PHRASE_CLIPS = {
   'ቢንጎ': 'bingo',
 };
 
-let currentAudio = null;
-let phraseActive = false;
-let queuedCall = null;
-const clipCache = new Map();
-
 // Bump this whenever a call is re-recorded. Telegram and mobile WebViews keep
 // the old file for the same URL, which can leave a single call playing stale
 // or wrong audio even after the clip is replaced.
 const CLIP_VERSION = '20261120b';
+const CACHE_NAME = `ethio-bingo-calls-${CLIP_VERSION}`;
+const PRELOAD_CONCURRENCY = 6;
+
+const CLIP_NAMES = [
+  'start',
+  'bingo',
+  ...Array.from({ length: 75 }, (_, index) => String(index + 1)),
+];
+
+let currentAudio = null;
+let phraseActive = false;
+let queuedCall = null;
+let playRequest = 0;
+let preloadStarted = false;
+
+// name -> Promise<blob URL> while downloading, name -> blob URL once ready.
+// Blob URLs keep playback local even on a slow connection.
+const clipLoads = new Map();
+const loadedClips = new Map();
 
 function clipUrl(name) {
   return `${CLIP_BASE}/${name}.mp3?v=${CLIP_VERSION}`;
 }
 
-/** Cached <audio> element so a repeated call replays instantly. */
-function clip(name) {
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchClipUrl(name, attempt = 0) {
   const url = clipUrl(name);
-  let audio = clipCache.get(url);
-  if (!audio) {
-    audio = new Audio(url);
-    audio.preload = 'auto';
-    clipCache.set(url, audio);
+  try {
+    let response = null;
+
+    if (typeof caches !== 'undefined') {
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        response = await cache.match(url);
+      } catch {
+        /* Cache Storage is unavailable in some WebViews. */
+      }
+    }
+
+    if (!response) {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 12000) : null;
+      try {
+        response = await fetch(url, {
+          cache: 'force-cache',
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (!response || !response.ok) throw new Error(`Audio clip ${name} is unavailable.`);
+
+      if (typeof caches !== 'undefined') {
+        try {
+          const cache = await caches.open(CACHE_NAME);
+          await cache.put(url, response.clone());
+        } catch {
+          /* In-memory blobs still work for this session. */
+        }
+      }
+    }
+
+    const blob = await response.blob();
+    if (!blob.size) throw new Error(`Audio clip ${name} is empty.`);
+    return URL.createObjectURL(blob);
+  } catch (err) {
+    // A slow or interrupted request gets one fresh attempt. The same clip is
+    // always used; there is no alternate voice.
+    if (attempt < 1) {
+      await delay(500);
+      return fetchClipUrl(name, attempt + 1);
+    }
+    throw err;
   }
-  return audio;
+}
+
+function loadClip(name) {
+  if (loadedClips.has(name)) return Promise.resolve(loadedClips.get(name));
+  if (clipLoads.has(name)) return clipLoads.get(name);
+
+  const load = fetchClipUrl(name)
+    .then((url) => {
+      loadedClips.set(name, url);
+      return url;
+    })
+    .catch((err) => {
+      // Do not cache a failed load; the next call can retry it.
+      clipLoads.delete(name);
+      throw err;
+    });
+  clipLoads.set(name, load);
+  return load;
 }
 
 function stopAudio() {
@@ -76,53 +151,69 @@ function stopAudio() {
 }
 
 /**
- * Plays a recorded clip. A failed request is retried once with the same clip;
- * onFail is only a notification, never a switch to a different voice.
+ * Plays a recorded clip after its cached blob is ready. A slow download waits
+ * for the same clip instead of going silent or switching voices.
  */
 function playClip(name, onFail, attempt = 0, onEnded) {
   if (typeof Audio === 'undefined') {
     if (onFail) onFail();
     return false;
   }
-  try {
-    stopAudio();
-    const audio = clip(name);
-    audio.preservesPitch = true;
-    audio.webkitPreservesPitch = true;
-    audio.mozPreservesPitch = true;
-    audio.playbackRate = 1;
-    const retry = () => {
-      // A newer call has already taken over; do not replay this one over it.
-      if (currentAudio !== audio) return;
-      currentAudio = null;
+
+  const request = ++playRequest;
+  stopAudio();
+
+  loadClip(name)
+    .then((url) => {
+      if (request !== playRequest) return;
+      try {
+        const audio = new Audio(url);
+        audio.preservesPitch = true;
+        audio.webkitPreservesPitch = true;
+        audio.mozPreservesPitch = true;
+        audio.playbackRate = 1;
+
+        const retry = () => {
+          // A newer call has already taken over; do not replay this one over it.
+          if (currentAudio !== audio) return;
+          currentAudio = null;
+          if (attempt < 1) {
+            setTimeout(() => playClip(name, onFail, attempt + 1, onEnded), 400);
+          } else if (onFail) {
+            onFail();
+          }
+        };
+        const finish = () => {
+          if (currentAudio !== audio) return;
+          currentAudio = null;
+          if (onEnded) onEnded();
+        };
+
+        audio.onerror = retry;
+        audio.onended = finish;
+        currentAudio = audio;
+        const played = audio.play();
+        if (played && typeof played.catch === 'function') played.catch(retry);
+      } catch {
+        if (request !== playRequest) return;
+        currentAudio = null;
+        if (attempt < 1) {
+          setTimeout(() => playClip(name, onFail, attempt + 1, onEnded), 400);
+        } else if (onFail) {
+          onFail();
+        }
+      }
+    })
+    .catch(() => {
+      if (request !== playRequest) return;
       if (attempt < 1) {
-        setTimeout(() => playClip(name, onFail, attempt + 1, onEnded), 400);
+        setTimeout(() => playClip(name, onFail, attempt + 1, onEnded), 600);
       } else if (onFail) {
         onFail();
       }
-    };
-    const finish = () => {
-      if (currentAudio !== audio) return;
-      currentAudio = null;
-      if (onEnded) onEnded();
-    };
-    audio.onerror = retry;
-    audio.onended = finish;
-    currentAudio = audio;
-    audio.currentTime = 0;
-    if (attempt > 0) audio.load();
-    const played = audio.play();
-    if (played && typeof played.catch === 'function') played.catch(retry);
-    return true;
-  } catch {
-    currentAudio = null;
-    if (attempt < 1) {
-      setTimeout(() => playClip(name, onFail, attempt + 1, onEnded), 400);
-    } else if (onFail) {
-      onFail();
-    }
-    return false;
-  }
+    });
+
+  return true;
 }
 
 function playQueuedCall() {
@@ -136,23 +227,29 @@ function finishPhrase() {
   playQueuedCall();
 }
 
-/** Downloads the round's clips so calls do not wait on the network. */
+/** Downloads every clip into the local cache before calls need them. */
 export function preloadCallClips() {
-  if (typeof Audio === 'undefined') return;
-  for (let n = 1; n <= 75; n += 1) {
-    try {
-      clip(String(n)).load();
-    } catch {
-      /* ignore */
+  if (preloadStarted || typeof fetch !== 'function' || typeof Audio === 'undefined') return;
+  preloadStarted = true;
+
+  let nextIndex = 0;
+  let active = 0;
+  const pump = () => {
+    while (active < PRELOAD_CONCURRENCY && nextIndex < CLIP_NAMES.length) {
+      const name = CLIP_NAMES[nextIndex];
+      nextIndex += 1;
+      active += 1;
+      loadClip(name)
+        .catch(() => {
+          /* A failed item is retried when that call is played. */
+        })
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
     }
-  }
-  for (const name of ['start', 'bingo']) {
-    try {
-      clip(name).load();
-    } catch {
-      /* ignore */
-    }
-  }
+  };
+  pump();
 }
 
 /** Plays the recorded male call for a number. */
@@ -170,6 +267,7 @@ export function playCallClip(number, onFail) {
 }
 
 export function stopCallAudio() {
+  playRequest += 1;
   stopAudio();
   phraseActive = false;
   queuedCall = null;

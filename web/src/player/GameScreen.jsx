@@ -203,13 +203,15 @@ export default function GameScreen({
   }, [game?.lastCalled, game?.id, voiceOn, voiceAvailable]);
 
   // Start warming the recorded clips immediately; the gesture handler below
-  // re-runs this after mobile autoplay has been unlocked.
+  // re-runs this after mobile autoplay has been unlocked. Do not spend mobile
+  // data on audio when voice is off or globally disabled.
   useEffect(() => {
+    if (!voiceOn || !voiceAvailable) return undefined;
     preloadCallClips();
     const unlock = () => preloadCallClips();
     document.addEventListener('pointerdown', unlock, { once: true });
     return () => document.removeEventListener('pointerdown', unlock);
-  }, []);
+  }, [voiceOn, voiceAvailable]);
 
   useEffect(() => {
     if (voiceOn) return;

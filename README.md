@@ -159,7 +159,7 @@ Money is stored as **integer santim** (1 ETB = 100 santim) everywhere.
 - **Withdrawal:** the exact Amharic manual-withdrawal notice, amount, bank, account number, holder
   name, live summary panel (`PENDING APPROVAL`, `15 - 30 Minutes`), submit button, history.
 - **Voice:** recorded male Amharic announcements for every called number, served as MP3 clips so
-  every device sounds the same; device speech and a remote stream remain as fallbacks. Toggle in
+  every device sounds the same; clips are downloaded and cached locally before playback. Toggle in
   the game header (also globally disableable by admins).
 - **Agent tab** appears for agent-role players and links to the agent dashboard.
 
@@ -398,8 +398,9 @@ Operational facts:
 
 Every call is a recorded male Amharic clip: `web/public/audio/calls/1.mp3` … `75.mp3` plus
 `start.mp3` and `bingo.mp3`. Playback needs no speech engine, so phones with no Amharic voice
-(common in Telegram's Android WebView) sound exactly like every other device. Clips are preloaded
-after the first tap for instant calls, and the first 75 are cached as `<audio>` elements.
+(common in Telegram's Android WebView) sound exactly like every other device. All clips are
+downloaded with limited concurrency, stored in Cache Storage and in memory, and a call waits for
+its own clip instead of going silent when the network is slow.
 
 `web/src/voice.js` uses these recorded clips only. If a clip request fails, it retries the same
 clip; it never switches to a remote stream or device speech, so the caller voice stays consistent.
