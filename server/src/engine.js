@@ -185,6 +185,7 @@ export function getPublicState() {
       players: [],
       calledNumbers: [],
       prizePool: 0,
+      offeredPrizePool: 0,
       stake: 0,
     };
   }
@@ -206,6 +207,9 @@ export function getPublicState() {
     status: round.status,
     stake: round.stake,
     prizePool: round.prizePool,
+    // The pot advertised during the round. It can differ from prizePool after
+    // a bot wins, because no real winner is paid and the payout pool is zero.
+    offeredPrizePool: round.offeredPrizePool ?? round.prizePool,
     // `playersCount` historically meant cards and is kept for older clients.
     // Use `playerCount` for people and `cardsCount` for card seats.
     playersCount: cards.length,
@@ -358,6 +362,7 @@ async function createRound() {
       nextCallAt: 0,
       nextRoundAt: 0,
       prizePool: 0,
+      offeredPrizePool: null,
       winners: [],
       winnerIds: [],
       payouts: {},
@@ -498,6 +503,7 @@ async function startCalling() {
   // Auto mode may have dropped bots while locking the table. Recompute so the
   // pot shown to players matches the seats that are actually playing.
   round.prizePool = prizePoolFor(round);
+  round.offeredPrizePool = round.prizePool;
   await prisma.game.update({
     where: { id: round.id },
     data: { status: 'CALLING', startedAt: new Date(), prizePool: round.prizePool },
@@ -594,25 +600,30 @@ async function finishRound(triggerPlayer, reason) {
   const winnerPayouts = new Map(realWinners.map((p) => [p.id, share]));
 
   // Bots are counted in the prize calculation but never own money. A bot
-  // winner gets no wallet credit or transaction; only real winners are paid.
-
-  // Real winners show their cash prize. A bot win still shows the winning
-  // card and masked phone, but no amount: no money moves for a bot.
-  round.winners = winners.map((p) => {
+  // winner gets no wallet credit or transaction. The result overlay still
+  // shows a normal prize on every winning card; round.payouts and the wallet
+  // rows remain the source of truth for real cash. If a real player also won,
+  // show only the real winner(s) so a bot is never exposed as a co-winner.
+  const visibleWinners = realWinners.length ? realWinners : winners;
+  const displayShare = visibleWinners.length
+    ? Math.floor(round.prizePool / visibleWinners.length)
+    : 0;
+  round.winners = visibleWinners.map((p) => {
     const winning = winnerCardFor(p);
     return {
       name: p.name,
       phone4: phone4From(p.phone),
       phoneMasked: maskPhone(p.phone),
-      amount: p.isBot ? 0 : winnerPayouts.get(p.id) || 0,
+      amount: displayShare,
       cardNumber: winning?.cardNumber || 1,
       card: winning?.card || null,
       line: winning?.line || null,
       marked: winning?.marked || [],
     };
   });
-  round.winnerIds = winners.map((p) => p.id);
+  round.winnerIds = visibleWinners.map((p) => p.id);
   round.payouts = Object.fromEntries(winnerPayouts);
+  round.offeredPrizePool = round.prizePool;
   round.prizePool = pool;
   round.nextRoundAt = Date.now() + Math.max(2000, Number(settings.roundEndDelayMs));
 
@@ -674,6 +685,7 @@ async function finishRound(triggerPlayer, reason) {
     winners: round.winners,
     winnerIds: round.winnerIds,
     prizePool: pool,
+    offeredPrizePool: round.offeredPrizePool,
     reason,
   });
   broadcastAll();

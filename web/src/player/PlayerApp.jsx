@@ -161,9 +161,15 @@ export default function PlayerApp() {
       if (mine && payload.winnerIds?.includes(mine)) {
         haptic('success');
         toast('🎉 ቢንጎ! በዚህ ዙር አሸንፈዋል!');
-        if (voiceOnRef.current && me?.config?.voiceEnabled !== false) speakPhrase('ቢንጎ');
       } else {
         toast('ዙሩ አልቋል። ቀጣዩ ዙር እየተጀመረ ነው…');
+      }
+      if (
+        payload.winnerIds?.length &&
+        voiceOnRef.current &&
+        me?.config?.voiceEnabled !== false
+      ) {
+        speakPhrase('ቢንጎ');
       }
       // The server normally sends a balance event first, but refresh here too
       // so a lost socket event cannot leave the wallet showing the old amount.

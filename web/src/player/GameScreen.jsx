@@ -1,15 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { etb, seconds } from '../format.js';
 import { COLUMNS, RANGES, callLabel, winningPatternCells } from '../bingo.js';
-import {
-  playCallClip,
-  playRemoteCall,
-  preloadCallClips,
-  primeVoices,
-  speakCall,
-  stopCallAudio,
-  stopSpeaking,
-} from '../voice.js';
+import { playCallClip, preloadCallClips, stopCallAudio } from '../voice.js';
 
 
 function countdown(ms) {
@@ -67,7 +59,7 @@ function WinnerOverlay({ game, you }) {
   const totalSeconds = Math.max(1, Math.ceil(Number(game?.roundEndDelayMs || 8000) / 1000));
   const progress = Math.max(0, Math.min(100, (secondsLeft / totalSeconds) * 100));
   const first = winners[0];
-  const prizePot = Number(game?.prizePool || 0);
+  const offeredPot = Number(game?.offeredPrizePool ?? game?.prizePool ?? 0);
 
   return (
     <div className="winner-overlay" role="dialog" aria-modal="true" aria-label="የቢንጎ አሸናፊዎች">
@@ -85,7 +77,7 @@ function WinnerOverlay({ game, you }) {
                 <span className="winner-count-line">{winners.length} አሸናፊዎች በዚህ ዙር</span>
               )}
             </div>
-            <div className="winner-pot">Total prize pot: {etb(prizePot)} ETB</div>
+            <div className="winner-pot">Total prize pot: {etb(offeredPot)} ETB</div>
           </header>
 
           <div className="winner-cards">
@@ -196,19 +188,12 @@ export default function GameScreen({
     [game?.calledNumbers],
   );
 
-  // Voice is Amharic only: the recorded male clip for the number plays first,
-  // then the remote clip, then device speech. Used for the automatic
-  // announcements while numbers are being called.
+  // Only the recorded caller clips are used. If one fails, playCallClip
+  // retries the same clip instead of switching to a different voice.
   const playCall = (number) => {
     if (!number) return;
-    stopCallAudio();
-    stopSpeaking();
-    playCallClip(number, () => playRemoteCall(number, () => speakCall(number)));
+    playCallClip(number);
   };
-
-  useEffect(() => {
-    primeVoices();
-  }, []);
 
   useEffect(() => {
     if (!voiceOn || !voiceAvailable || !game?.lastCalled) return;
@@ -217,32 +202,22 @@ export default function GameScreen({
     playCall(game.lastCalled);
   }, [game?.lastCalled, game?.id, voiceOn, voiceAvailable]);
 
-  // Mobile browsers only allow speech after a user gesture; warm the engine up
-  // once so later automated calls are not silently dropped.
+  // Start warming the recorded clips immediately; the gesture handler below
+  // re-runs this after mobile autoplay has been unlocked.
   useEffect(() => {
-    const unlock = () => {
-      preloadCallClips();
-      try {
-        const warm = new SpeechSynthesisUtterance(' ');
-        warm.volume = 0;
-        window.speechSynthesis?.speak(warm);
-      } catch {
-        /* unsupported */
-      }
-    };
+    preloadCallClips();
+    const unlock = () => preloadCallClips();
     document.addEventListener('pointerdown', unlock, { once: true });
     return () => document.removeEventListener('pointerdown', unlock);
   }, []);
 
   useEffect(() => {
     if (voiceOn) return;
-    stopSpeaking();
     stopCallAudio();
   }, [voiceOn]);
 
   useEffect(
     () => () => {
-      stopSpeaking();
       stopCallAudio();
       if (noticeTimer.current) clearTimeout(noticeTimer.current);
     },
@@ -302,7 +277,7 @@ export default function GameScreen({
   const spent = you?.spent || 0;
   // Bots are counted as players in the prize calculation. They can win a
   // round, but never receive cash. The server is the source of truth here.
-  const poolDisplay = Number(game?.prizePool || 0);
+  const poolDisplay = Number(game?.offeredPrizePool ?? game?.prizePool ?? 0);
   const stakeSantim = game?.stake || stake || 0;
   const uniquePlayers = new Set((game?.players || []).map((entry) => entry.playerId)).size;
   const players = Number(game?.playerCount ?? uniquePlayers);

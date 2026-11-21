@@ -6,8 +6,9 @@ export default function TopBar({ me, game, you, onRefresh, refreshing, view = 'g
   const uniquePlayers = new Set((game?.players || []).map((entry) => entry.playerId)).size;
   const players = Number(game?.playerCount ?? uniquePlayers);
   const stakeSantim = Number(game?.stake || me?.config?.stake || 0);
-  // The server pot includes both real card seats and bot seats.
-  const derash = Number(game?.prizePool || 0);
+  // The server pot includes both real card seats and bot seats. After a bot
+  // win the payout pool is zero, so keep showing the pot that was at stake.
+  const derash = Number(game?.offeredPrizePool ?? game?.prizePool ?? 0);
   const calledCount = game?.drawNumber ?? game?.calledNumbers?.length ?? 0;
 
   return (

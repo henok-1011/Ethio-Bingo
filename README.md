@@ -401,9 +401,9 @@ Every call is a recorded male Amharic clip: `web/public/audio/calls/1.mp3` … `
 (common in Telegram's Android WebView) sound exactly like every other device. Clips are preloaded
 after the first tap for instant calls, and the first 75 are cached as `<audio>` elements.
 
-`web/src/voice.js` falls back in two steps if a clip is missing or blocked: the remote Amharic
-stream at a lowered pitch, then device speech synthesis at pitch `0.45`. Players can tap any call in
-the `ጥሪዎች` rail to hear it again.
+`web/src/voice.js` uses these recorded clips only. If a clip request fails, it retries the same
+clip; it never switches to a remote stream or device speech, so the caller voice stays consistent.
+Players can tap any call in the `ጥሪዎች` rail to hear it again.
 
 To regenerate the clips with an Azure Speech key (voice `am-ET-AmehaNeural`, free F0 tier):
 
