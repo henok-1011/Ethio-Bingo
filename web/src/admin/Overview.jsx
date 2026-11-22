@@ -38,6 +38,7 @@ export default function Overview({ token, onNavigate }) {
   if (!data) return <div className="panel">{error ? <div className="form-error">{error}</div> : 'Loading analytics…'}</div>;
 
   const t = data.totals;
+  const r = data.reconciliation;
   const pie = data.pie.map((item) => ({
     label: item.label.charAt(0).toUpperCase() + item.label.slice(1),
     value: item.value,
@@ -72,6 +73,91 @@ export default function Overview({ token, onNavigate }) {
         <Stat label="GMV (stakes)" value={money(t.gmv)} hint="All-time stakes" />
         <Stat label="Avg prize pool" value={money(data.gameStats.avgPrize)} hint="Per finished round" />
       </div>
+
+      <section className="panel recon-panel">
+        <div className="section-title">
+          <h3>Cash &amp; reconciliation</h3>
+          <span className="muted small">All time · verified deposits vs approved withdrawals</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th>Verified deposits</th>
+                <th>Player withdrawals</th>
+                <th>Agent withdrawals</th>
+                <th>Cash position</th>
+              </tr>
+            </thead>
+            <tbody>
+              {r.channels.map((channel) => (
+                <tr key={channel.id}>
+                  <td>
+                    <strong>{channel.label}</strong>
+                  </td>
+                  <td>{money(channel.deposits)}</td>
+                  <td>{money(channel.playerWithdrawals)}</td>
+                  <td>{money(channel.agentWithdrawals)}</td>
+                  <td>
+                    <strong>{money(channel.balance)}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td>
+                  <strong>Total cash on hand</strong>
+                </td>
+                <td>
+                  <strong>{money(r.totals.deposits)}</strong>
+                </td>
+                <td>
+                  <strong>{money(r.totals.playerWithdrawals)}</strong>
+                </td>
+                <td>
+                  <strong>{money(r.totals.agentWithdrawals)}</strong>
+                </td>
+                <td>
+                  <strong>{money(r.totals.balance)}</strong>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div className="stat-grid recon-summary">
+          <Stat
+            label="Owed to players"
+            value={money(r.liabilities.playerBalances)}
+            hint="Wallet balances not yet withdrawn"
+          />
+          <Stat
+            label="Owed to agents"
+            value={money(r.liabilities.agentBalances)}
+            hint="Commission balances not yet withdrawn"
+          />
+          <Stat
+            label="Pending withdrawals"
+            value={money(r.liabilities.pendingPlayerWithdrawals + r.liabilities.pendingAgentWithdrawals)}
+            hint="Reserved from balances, not paid yet"
+          />
+          <Stat
+            label="Net after liabilities"
+            value={money(r.net)}
+            hint="Cash on hand − player, agent and pending balances"
+            tone={r.net < 0 ? 'gold' : 'green'}
+          />
+        </div>
+
+        <p className="muted small recon-note">
+          Per-channel figures are best-effort: deposits without a verified Telebirr/CBE provider and
+          withdrawals to other banks are grouped as unassigned, so the total still matches money in
+          minus money out. Pending withdrawals have already been deducted from player and agent
+          balances.
+        </p>
+      </section>
 
       <div className="pending-row-cards">
         <button type="button" className="pending-card" onClick={() => onNavigate('withdrawals')}>

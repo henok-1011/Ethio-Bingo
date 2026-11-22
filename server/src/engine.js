@@ -14,7 +14,6 @@ import {
   computePayout,
   projectedPrizeStakes,
   settleRound,
-  totalPrizeStakes,
   totalRealStakes,
 } from './payouts.js';
 import { botSeatTarget, isBotAuto } from './bots.js';
@@ -588,26 +587,31 @@ async function finishRound(triggerPlayer, reason) {
 
   const realWinners = winners.filter((p) => !p.isBot);
   const realStakes = totalRealStakes(round.players);
+  // Settlement runs on real cash only. Bot seats inflate the advertised pot
+  // the player sees during the round, but they never fund a payout and never
+  // become platform revenue.
   const { pool, platformFee, share } = settleRound({
-    stakes: totalPrizeStakes(round.players, round.stake),
     cashStakes: realStakes,
     platformFeeRate: settings.platformFeeRate,
     realWinnerCount: realWinners.length,
   });
   // This map is the single source of truth for the amount shown on the
   // winner card, stored on the player row, credited to the wallet, and
-  // written to the transaction history.
+  // written to the transaction history. It is the real-cash share, never a
+  // bot-funded amount.
   const winnerPayouts = new Map(realWinners.map((p) => [p.id, share]));
 
-  // Bots are counted in the prize calculation but never own money. A bot
-  // winner gets no wallet credit or transaction. The result overlay still
-  // shows a normal prize on every winning card; round.payouts and the wallet
-  // rows remain the source of truth for real cash. If a real player also won,
-  // show only the real winner(s) so a bot is never exposed as a co-winner.
+  // Bots never own money: a bot winner gets no wallet credit or transaction. A
+  // real winner is shown exactly the real-cash share that is credited to them.
+  // If a real player won, show only the real winner(s) so a bot is never
+  // exposed as a co-winner; a bot-only win keeps the advertised pot on its
+  // result card as a cosmetic figure.
   const visibleWinners = realWinners.length ? realWinners : winners;
-  const displayShare = visibleWinners.length
-    ? Math.floor(round.prizePool / visibleWinners.length)
-    : 0;
+  const displayShare = realWinners.length
+    ? share
+    : visibleWinners.length
+      ? Math.floor(round.prizePool / visibleWinners.length)
+      : 0;
   round.winners = visibleWinners.map((p) => {
     const winning = winnerCardFor(p);
     return {
