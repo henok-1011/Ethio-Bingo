@@ -12,6 +12,8 @@ import {
   requireStaff,
 } from '../auth.js';
 import { linkReferral } from '../agents.js';
+import { createRegisteredUser } from '../registration-bonus.js';
+import { sendRegistrationBonusMessage } from '../telegram.js';
 
 const router = Router();
 
@@ -54,6 +56,7 @@ function publicUser(user) {
     firstName: user.firstName,
     phone: user.phone,
     balance: user.balance,
+    bonusBalance: user.bonusBalance,
     derash: user.derash,
     role: user.role,
     referredByAgentId: user.referredByAgentId,
@@ -79,14 +82,15 @@ router.post(
     const identity = resolveIdentity({ initData, startParam, devTelegramId, devFirstName, devUsername });
 
     let user = await prisma.user.findUnique({ where: { telegramId: identity.telegramId } });
+    let registrationBonus = 0;
     if (!user) {
-      user = await prisma.user.create({
-        data: {
-          telegramId: identity.telegramId,
-          firstName: identity.firstName || 'Player',
-          username: identity.username || null,
-        },
+      const created = await createRegisteredUser({
+        telegramId: identity.telegramId,
+        firstName: identity.firstName,
+        username: identity.username,
       });
+      user = created.user;
+      registrationBonus = created.bonus;
     } else {
       user = await prisma.user.update({
         where: { id: user.id },
@@ -95,6 +99,14 @@ router.post(
           username: identity.username || user.username,
         },
       });
+    }
+
+    if (registrationBonus > 0) {
+      void sendRegistrationBonusMessage({
+        telegramId: user.telegramId,
+        firstName: user.firstName,
+        amountSantim: registrationBonus,
+      }).catch((err) => console.error('[telegram] registration bonus message failed', err.message));
     }
 
     if (user.isBanned) throw new AppError('ይህ መለያ ታግዷል።', 403);

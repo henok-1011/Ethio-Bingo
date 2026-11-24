@@ -28,8 +28,16 @@ export const BANKS = [
 ];
 
 async function pushBalance(userId) {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true } });
-  if (user) emitToUser(userId, 'balance', { balance: user.balance });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { balance: true, bonusBalance: true },
+  });
+  if (user) {
+    emitToUser(userId, 'balance', {
+      balance: user.balance,
+      bonusBalance: user.bonusBalance,
+    });
+  }
   return user?.balance ?? 0;
 }
 
@@ -331,6 +339,61 @@ export async function rejectAgentWithdrawal(withdrawalId, staffId, note) {
     }),
   ]);
   return { ok: true };
+}
+
+export async function grantPlayBonuses({ userIds = [], all = false, amountSantim, staffId, reason = 'Manual play bonus' }) {
+  const amount = Number(amountSantim);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+    throw new AppError('Enter a bonus between 1 and 10,000 ETB.');
+  }
+  const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map(Number).filter(Number.isInteger))];
+  if (!all && !ids.length) throw new AppError('Choose at least one player.');
+
+  const users = await prisma.user.findMany({
+    where: all
+      ? { role: 'player', isBanned: false }
+      : { id: { in: ids }, role: 'player', isBanned: false },
+    select: { id: true, firstName: true, telegramId: true },
+  });
+  if (!users.length) throw new AppError('No eligible players found.');
+  if (!all && users.length !== ids.length) {
+    throw new AppError('Some selected players no longer exist, are banned, or are not players.');
+  }
+
+  const note = String(reason || 'Manual play bonus').slice(0, 300);
+  const reference = staffId ? `admin:${staffId}` : 'admin';
+  await prisma.$transaction([
+    prisma.user.updateMany({
+      where: { id: { in: users.map((user) => user.id) } },
+      data: { bonusBalance: { increment: amount } },
+    }),
+    prisma.transaction.createMany({
+      data: users.map((user) => ({
+        userId: user.id,
+        type: 'bonus',
+        amount,
+        status: 'completed',
+        reference,
+        meta: `${note} (play-only)`,
+      })),
+    }),
+    prisma.adminAction.create({
+      data: {
+        staffId,
+        actionType: 'bonus_grant',
+        details: JSON.stringify({
+          amount,
+          all,
+          credited: users.length,
+          userIds: users.slice(0, 50).map((user) => user.id),
+          reason: note,
+        }),
+      },
+    }),
+  ]);
+
+  for (const user of users) emitToUser(user.id, 'balance', { refreshed: true });
+  return { credited: users.length, amount, users };
 }
 
 export async function adjustBalance(userId, amountSantim, staffId, reason) {

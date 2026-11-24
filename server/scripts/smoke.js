@@ -54,6 +54,8 @@ async function main() {
     method: 'PUT',
     body: {
       stake: 20,
+      registrationBonusEnabled: true,
+      registrationBonus: 50,
       botCount: 0,
       waitSeconds: 6,
       callIntervalMs: 1000,
@@ -80,6 +82,11 @@ async function main() {
   check('player registration with referral', register.status === 200 && register.data.user);
   const playerToken = register.data.token;
   check('player is linked to agent', Boolean(register.data.user?.referredByAgentId));
+  check(
+    'new player received the 50 ETB play-only welcome bonus',
+    register.data.user?.balance === 0 && register.data.user?.bonusBalance === 5000,
+    `balance=${register.data.user?.balance} bonus=${register.data.user?.bonusBalance}`,
+  );
 
   // A CBE PDF receipt cannot be read automatically, so it lands in the admin
   // review queue without any outbound network call. The admin then approves it
@@ -115,7 +122,11 @@ async function main() {
   check('admin approved the deposit', approve.status === 200, JSON.stringify(approve.data));
 
   const playerMe = await request('/api/me', { token: playerToken });
-  check('wallet credited with 40 ETB', playerMe.data.user?.balance === 4000, `balance=${playerMe.data.user?.balance}`);
+  check(
+    'wallet credited with the 40 ETB deposit',
+    playerMe.data.user?.balance === 4000 && playerMe.data.user?.bonusBalance === 5000,
+    `balance=${playerMe.data.user?.balance} bonus=${playerMe.data.user?.bonusBalance}`,
+  );
 
   const agentLogin = await request('/api/auth/staff/login', {
     method: 'POST',
@@ -143,7 +154,11 @@ async function main() {
 
   const join = await request('/api/game/join', { token: playerToken, method: 'POST', body: { cards: 1 } });
   check('player joined round', join.status === 200 && join.data.cards?.length === 1, JSON.stringify(join.data));
-  check('stake deducted', join.data.balance === 2000, `balance=${join.data.balance}`);
+  check(
+    'stake deducted from play-only bonus first',
+    join.data.balance === 4000 && join.data.bonusBalance === 4800,
+    `balance=${join.data.balance} bonus=${join.data.bonusBalance}`,
+  );
 
   let claimed = false;
   let ended = null;
@@ -180,8 +195,8 @@ async function main() {
   const wallet = await request('/api/wallet/transactions', { token: playerToken });
   const types = new Set(wallet.data.map((t) => t.type));
   check(
-    'ledger recorded deposit and stake',
-    types.has('deposit') && types.has('stake'),
+    'ledger recorded bonus, deposit and stake',
+    types.has('bonus') && types.has('deposit') && types.has('stake'),
     [...types].join(','),
   );
   check('win ledger matches the winner', playerWon ? types.has('win') : !types.has('win'), [...types].join(','));
@@ -200,6 +215,8 @@ async function main() {
     method: 'PUT',
     body: {
       stake: 20,
+      registrationBonusEnabled: true,
+      registrationBonus: 50,
       botCount: 8,
       waitSeconds: 20,
       callIntervalMs: 3000,

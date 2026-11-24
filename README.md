@@ -315,10 +315,10 @@ Auth via `auth.token` (player JWT). Events emitted by the server:
 
 `server/prisma/schema.prisma` defines:
 
-- `User` (telegram id, balance, derash, role, `referredByAgentId`, ban/played flags, autoMark)
+- `User` (telegram id, withdrawable balance, play-only bonus, derash, role, `referredByAgentId`, ban/played flags, autoMark)
 - `Agent`, `Referral`, `AgentTransaction`, `AgentWithdrawal`, `StaffAccount`
 - `Game`, `GamePlayer` (cards JSON, bot flag, win), `CalledNumber`
-- `Transaction` (deposit/withdrawal/stake/win/refund/adjustment ledger)
+- `Transaction` (deposit/withdrawal/stake/win/bonus/refund/adjustment ledger)
 - `Deposit`, `Withdrawal` (manual approval flow)
 - `PlatformSetting` (fees, timers, bot count, commission rates, next winner)
 - `VoiceFile`, `AdminAction`

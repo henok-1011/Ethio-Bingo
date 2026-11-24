@@ -56,6 +56,12 @@ export default function TopBar({ me, game, you, onRefresh, refreshing, view = 'g
             {etb(me?.user?.balance)} <small>ETB</small>
           </strong>
         </div>
+        <div className="stat bonus-stat" title="Play-only bonus — cannot be withdrawn">
+          <span>ቦናስ</span>
+          <strong>
+            {etb(me?.user?.bonusBalance)} <small>ETB</small>
+          </strong>
+        </div>
         <div className="stat derash-stat">
           <span>ደራሽ</span>
           <strong>

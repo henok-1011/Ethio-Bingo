@@ -232,6 +232,7 @@ export default function GameScreen({
   const selectionMs = game?.selectionEndsInMs ?? game?.startsInMs ?? 0;
   const windowOpen = isWaiting && selectionMs > 0;
   const selectionPage = isWaiting && windowOpen;
+  const showCards = Boolean(you?.cards?.length) && !windowOpen;
   const mySlots = you?.slots || [];
   const mySlotSet = new Set(mySlots);
   const autoMarkOn = you ? you.autoMark !== false : me?.user?.autoMark !== false;
@@ -277,6 +278,9 @@ export default function GameScreen({
   const takenSet = useMemo(() => new Set(game?.takenCards || []), [game?.takenCards]);
   const perCard = game?.stake || stake || 0;
   const spent = you?.spent || 0;
+  const cashBalance = Number(me?.user?.balance || 0);
+  const bonusBalance = Number(me?.user?.bonusBalance || 0);
+  const playableBalance = cashBalance + bonusBalance;
   // Bots are counted as players in the prize calculation. They can win a
   // round, but never receive cash. The server is the source of truth here.
   const poolDisplay = Number(game?.offeredPrizePool ?? game?.prizePool ?? 0);
@@ -318,6 +322,83 @@ export default function GameScreen({
           : ended
             ? 'ዙሩ ተጠናቅቋል። ቀጣዩን ይጠብቁ።'
             : 'መልካም እድል!';
+
+  const cardsSection = showCards ? (
+    <section className="my-cards jo-cards">
+      <div className="section-title">
+        <h3>የእኔ {you.cards.length > 1 ? 'ካርዶች' : 'ካርድ'}</h3>
+        <span className="muted amharic">
+          {you.hasBingo
+            ? '2 ዝግ ተሞልቷል!'
+            : autoMarkOn
+              ? 'ራስ-ሰር ምልክት'
+              : 'በእጅ ምልክት'}
+        </span>
+      </div>
+      <div className="card-scroll">
+        {you.cards.map((card, index) => {
+          const markedNumbers = new Set(you.marked?.[index] || []);
+          for (const key of Object.keys(pendingMarks)) {
+            const [pendingCard, pendingNumber] = key.split(':').map(Number);
+            if (pendingCard === index) markedNumbers.add(pendingNumber);
+          }
+          const winLine = winningPatternCells(card, markedNumbers);
+          const winSet = new Set((winLine || []).map(([col, row]) => `${col}-${row}`));
+          return (
+            <div className={`bingo-card ${winLine ? 'winning' : ''}`} key={index}>
+              <div className="bingo-card-head">
+                {COLUMNS.map((letter) => (
+                  <span key={letter} className={`jo-col-${letter.toLowerCase()}`}>
+                    {letter}
+                  </span>
+                ))}
+              </div>
+              {Array.from({ length: 5 }, (_, row) => (
+                <div className="bingo-card-row" key={row}>
+                  {COLUMNS.map((_, col) => {
+                    const n = card[col][row];
+                    const marked = n === 0 || markedNumbers.has(n);
+                    const selected = winSet.has(`${col}-${row}`);
+                    const canToggle = !autoMarkOn && isCalling && n > 0 && called.has(n);
+                    return (
+                      <button
+                        key={col}
+                        type="button"
+                        className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''}`}
+                        disabled={!canToggle}
+                        onClick={() => markCell(index, n)}
+                        aria-pressed={marked}
+                        aria-label={
+                          n === 0
+                            ? 'ነጻ ማዕከል'
+                            : canToggle
+                              ? marked
+                                ? `ቁጥር ${n} ምልክቱን ያንሱ`
+                                : `ቁጥር ${n} ምልክት ያድርጉ`
+                              : `ቁጥር ${n}`
+                        }
+                      >
+                        {n === 0 ? 'F' : n}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              <div className="bingo-card-foot">
+                <span>ካርድ #{you.slots?.[index] ?? index + 1}</span>
+                <span className="card-win">ጠቅላላ ሽልማት {etb(poolDisplay)} ETB</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {!autoMarkOn && isCalling ? (
+        <p className="jo-manual-note amharic">
+          Auto Marking OFF — የተጠራውን ቁጥር በካርድዎ ላይ ይንኩ።
+        </p>
+      ) : null}
+    </section>
+  ) : null;
 
   return (
     <div className={`game-screen jo-game ${selectionPage ? 'selecting' : ''}`}>
@@ -387,7 +468,9 @@ export default function GameScreen({
           </div>
         </div>
 
-        <div className="jo-main">
+        <div className={`jo-live ${showCards ? 'has-cards' : ''}`}>
+          <div className="jo-call-column">
+            <div className="jo-main">
           <section className="jo-card" aria-label="የቢንጎ ሰሌዳ">
             <div className="jo-headers">
               {COLUMNS.map((letter) => (
@@ -447,6 +530,19 @@ export default function GameScreen({
 
             <div className="jo-text amharic">{gameMessage}</div>
           </section>
+            </div>
+
+            <button
+              type="button"
+              className="jo-refresh-under"
+              onClick={onRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? '…' : '↻ REFRESH'}
+            </button>
+          </div>
+
+          {cardsSection}
         </div>
 
         {selectionPage && (
@@ -462,7 +558,8 @@ export default function GameScreen({
               </button>
               <div className="jo-select-balance">
                 <span>BALANCE</span>
-                <strong>{etb(me?.user?.balance)} ETB</strong>
+                <strong>{etb(playableBalance)} ETB</strong>
+                {bonusBalance > 0 && <small>includes {etb(bonusBalance)} bonus</small>}
               </div>
               <div className="jo-select-ad" aria-hidden="true">
                 <span>🔥 JACKPOT! 🔥</span>
@@ -636,88 +733,10 @@ export default function GameScreen({
               </div>
             ) : (
               <div className="waiting-note amharic">
-                <span className="pulse-dot" /> የመምረጫ ጊዜው አልቋል። ካርዶችዎ ከዚህ
-                በታች ይታያሉ — ጥሪው ይጀምራል።
+                <span className="pulse-dot" /> የመምረጫ ጊዜው አልቋል። ካርዶችዎ በቀኝ
+                በኩል ይታያሉ — ጥሪው ይጀምራል።
               </div>
             )}
-          </section>
-        )}
-
-        {you?.cards?.length > 0 && !windowOpen && (
-          <section className="my-cards jo-cards">
-            <div className="section-title">
-              <h3>የእኔ {you.cards.length > 1 ? 'ካርዶች' : 'ካርድ'}</h3>
-              <span className="muted amharic">
-                {you.hasBingo
-                  ? '2 ዝግ ተሞልቷል!'
-                  : autoMarkOn
-                    ? 'ራስ-ሰር ምልክት'
-                    : 'በእጅ ምልክት'}
-              </span>
-            </div>
-            <div className="card-scroll">
-              {you.cards.map((card, index) => {
-                const markedNumbers = new Set(you.marked?.[index] || []);
-                for (const key of Object.keys(pendingMarks)) {
-                  const [pendingCard, pendingNumber] = key.split(':').map(Number);
-                  if (pendingCard === index) markedNumbers.add(pendingNumber);
-                }
-                const winLine = winningPatternCells(card, markedNumbers);
-                const winSet = new Set((winLine || []).map(([col, row]) => `${col}-${row}`));
-                return (
-                  <div className={`bingo-card ${winLine ? 'winning' : ''}`} key={index}>
-                    <div className="bingo-card-head">
-                      {COLUMNS.map((letter) => (
-                        <span key={letter} className={`jo-col-${letter.toLowerCase()}`}>
-                          {letter}
-                        </span>
-                      ))}
-                    </div>
-                    {Array.from({ length: 5 }, (_, row) => (
-                      <div className="bingo-card-row" key={row}>
-                        {COLUMNS.map((_, col) => {
-                          const n = card[col][row];
-                          const marked = n === 0 || markedNumbers.has(n);
-                          const selected = winSet.has(`${col}-${row}`);
-                          const canToggle =
-                            !autoMarkOn && isCalling && n > 0 && called.has(n);
-                          return (
-                            <button
-                              key={col}
-                              type="button"
-                              className={`bingo-cell jo-col-${COLUMNS[col].toLowerCase()} ${marked ? 'marked' : ''} ${selected ? 'selected' : ''} ${n === 0 ? 'free' : ''}`}
-                              disabled={!canToggle}
-                              onClick={() => markCell(index, n)}
-                              aria-pressed={marked}
-                              aria-label={
-                                n === 0
-                                  ? 'ነጻ ማዕከል'
-                                  : canToggle
-                                    ? marked
-                                      ? `ቁጥር ${n} ምልክቱን ያንሱ`
-                                      : `ቁጥር ${n} ምልክት ያድርጉ`
-                                    : `ቁጥር ${n}`
-                              }
-                            >
-                              {n === 0 ? 'F' : n}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ))}
-                    <div className="bingo-card-foot">
-                      <span>ካርድ #{you.slots?.[index] ?? index + 1}</span>
-                      <span className="card-win">ጠቅላላ ሽልማት {etb(poolDisplay)} ETB</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {!autoMarkOn && isCalling ? (
-              <p className="jo-manual-note amharic">
-                Auto Marking OFF — የተጠራውን ቁጥር በካርድዎ ላይ ይንኩ።
-              </p>
-            ) : null}
           </section>
         )}
 
@@ -739,16 +758,7 @@ export default function GameScreen({
             >
               {you.hasBingo ? 'BINGO! አሁን ይጠይቁ' : 'BINGO!'}
             </button>
-          ) : (
-            <button
-              type="button"
-              className="jo-cta refresh"
-              onClick={onRefresh}
-              disabled={refreshing}
-            >
-              {refreshing ? '…' : 'REFRESH'}
-            </button>
-          )}
+          ) : null}
         </div>
 
         <div className="jo-footer">Ethio Bingo · መልካም እድል</div>

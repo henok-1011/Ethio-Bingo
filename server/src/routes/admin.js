@@ -18,9 +18,10 @@ import {
   rejectAgentWithdrawal,
   rejectDeposit,
   rejectWithdrawal,
+  grantPlayBonuses,
 } from '../wallet.js';
 import { setSetting } from '../settings.js';
-import { broadcastTelegram, requestPhoneFromUser } from '../telegram.js';
+import { broadcastTelegram, requestPhoneFromUser, sendPlayBonusMessages } from '../telegram.js';
 import { broadcast } from '../realtime.js';
 import { uniqueReferralCode } from '../agents.js';
 import { referralLinkFor } from './auth.js';
@@ -115,6 +116,7 @@ router.get(
         firstName: u.firstName,
         phone: u.phone,
         balance: u.balance,
+        bonusBalance: u.bonusBalance,
         derash: u.derash,
         role: u.role,
         isBanned: u.isBanned,
@@ -154,6 +156,42 @@ router.get(
       take: 100,
     });
     res.json({ user, referrals });
+  }),
+);
+
+router.post(
+  '/bonuses',
+  asyncHandler(async (req, res) => {
+    const amount = money(req.body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+      throw new AppError('Enter a bonus between 1 and 10,000 ETB.');
+    }
+    const all = req.body?.all === true;
+    const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds.slice(0, 1000) : [];
+    if (!all && !userIds.length) throw new AppError('Choose at least one player.');
+
+    const { users, ...summary } = await grantPlayBonuses({
+      all,
+      userIds,
+      amountSantim: amount,
+      staffId: req.staff.sid,
+      reason: String(req.body?.reason || 'Manual play bonus').slice(0, 300),
+    });
+
+    let message;
+    if (all) {
+      const telegramEnabled = Boolean(process.env.TELEGRAM_BOT_TOKEN);
+      message = { status: telegramEnabled ? 'queued' : 'simulated', total: users.length };
+      if (telegramEnabled) {
+        void sendPlayBonusMessages(users, amount)
+          .then((delivery) => console.log('[telegram] bulk bonus promos:', delivery))
+          .catch((err) => console.error('[telegram] bulk bonus promos failed', err.message));
+      }
+    } else {
+      message = await sendPlayBonusMessages(users, amount);
+    }
+
+    res.json({ ...summary, message });
   }),
 );
 
@@ -556,8 +594,8 @@ router.post(
 
     let override;
     if (type === 'bot') {
-      const name = String(req.body?.name || 'Lucky Bot').slice(0, 40);
-      override = { type: 'bot', name };
+      // Bot display names are always assigned from the Ethiopian name pool.
+      override = { type: 'bot' };
     } else if (type === 'user') {
       const userId = Number(req.body?.userId);
       const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -576,7 +614,7 @@ router.post(
       data: {
         staffId: req.staff.sid,
         actionType: 'winner_override_set',
-        details: `${override.type}:${override.userId || override.name} scope:${scope}`,
+        details: `${override.type}:${override.userId || 'random'} scope:${scope}`,
       },
     });
     return res.json({ ok: true, nextWinner: override, scope });
@@ -596,6 +634,14 @@ router.put(
     const body = req.body || {};
     const patch = {};
     if (body.stake !== undefined) patch.stake = String(Math.round(parsePositive(body.stake, 'stake', { min: 1, max: 100000 }) * 100));
+    if (body.registrationBonusEnabled !== undefined) {
+      patch.registrationBonusEnabled = body.registrationBonusEnabled ? '1' : '0';
+    }
+    if (body.registrationBonus !== undefined) {
+      patch.registrationBonus = String(
+        Math.round(parsePositive(body.registrationBonus, 'registration bonus', { min: 0, max: 10000 }) * 100),
+      );
+    }
     const botAuto = body.botAuto !== undefined
       ? Boolean(body.botAuto)
       : String(getSettings().botAuto ?? '1') !== '0';

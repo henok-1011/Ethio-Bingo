@@ -97,6 +97,7 @@ export async function adminOverview() {
     .filter((t) => ['deposit_bonus', 'activity_bonus', 'gameplay_commission'].includes(t.type))
     .reduce((acc, t) => acc + t.amount, 0);
   const platformFees = allGames.reduce((acc, g) => acc + g.platformFee, 0);
+  const playBonuses = totalByType('bonus');
 
   // Cash reconciliation: only real money movement counts. Verified deposits
   // are what landed in the Telebirr / CBE accounts; approved withdrawals are
@@ -227,7 +228,8 @@ export async function adminOverview() {
       agentCommissions: cardCommissions,
       agentPayouts,
       referralBonuses,
-      netRevenue: platformFees - agentPayouts,
+      playBonuses,
+      netRevenue: platformFees - agentPayouts - playBonuses,
       winPayouts: winAgg._sum.amount || 0,
       gmv: totalByType('stake'),
       players: usersCount,

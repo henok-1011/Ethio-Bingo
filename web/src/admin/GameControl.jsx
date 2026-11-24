@@ -9,6 +9,8 @@ const CARD_COLUMNS = ['B', 'I', 'N', 'G', 'O'];
 function toForm(settings) {
   return {
     stake: Number(settings.stake) / 100,
+    registrationBonusEnabled: settings.registrationBonusEnabled !== '0',
+    registrationBonus: Number(settings.registrationBonus) / 100,
     botCount: Number(settings.botCount),
     botAuto: settings.botAuto !== '0',
     waitSeconds: Number(settings.waitSeconds),
@@ -40,9 +42,15 @@ export default function GameControl({ token }) {
   const [editingBroadcast, setEditingBroadcast] = useState(false);
   const [winnerType, setWinnerType] = useState('none');
   const [winnerUserId, setWinnerUserId] = useState('');
-  const [botName, setBotName] = useState('Lucky Bot');
   const [userSearch, setUserSearch] = useState('');
   const [users, setUsers] = useState([]);
+  const [bonusAmount, setBonusAmount] = useState(50);
+  const [bonusAudience, setBonusAudience] = useState('selected');
+  const [bonusUserSearch, setBonusUserSearch] = useState('');
+  const [bonusUsers, setBonusUsers] = useState([]);
+  const [bonusSelected, setBonusSelected] = useState([]);
+  const [bonusSending, setBonusSending] = useState(false);
+  const [bonusResult, setBonusResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
 
@@ -82,6 +90,24 @@ export default function GameControl({ token }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userSearch, token]);
 
+  useEffect(() => {
+    if (bonusAudience !== 'selected' || !bonusUserSearch.trim()) {
+      setBonusUsers([]);
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      api(`/api/admin/users?search=${encodeURIComponent(bonusUserSearch)}`, { token })
+        .then((rows) =>
+          setBonusUsers(
+            rows.filter((user) => user.role === 'player' && !user.isBanned).slice(0, 20),
+          ),
+        )
+        .catch(() => {});
+    }, 350);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bonusUserSearch, bonusAudience, token]);
+
   const set = (key) => (event) => {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -116,6 +142,61 @@ export default function GameControl({ token }) {
     }
   }
 
+  function toggleBonusUser(user) {
+    setBonusSelected((prev) =>
+      prev.some((entry) => entry.id === user.id)
+        ? prev.filter((entry) => entry.id !== user.id)
+        : [...prev, user],
+    );
+  }
+
+  function clearBonusSelection() {
+    setBonusSelected([]);
+  }
+
+  async function giveBonus(event) {
+    event.preventDefault();
+    const amount = Number(bonusAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast('Enter a valid bonus amount.', 'error');
+      return;
+    }
+    if (bonusAudience === 'selected' && !bonusSelected.length) {
+      toast('Choose at least one player.', 'error');
+      return;
+    }
+    if (
+      bonusAudience === 'all' &&
+      !window.confirm(`Give a ${amount} ETB play-only bonus to every active player?`)
+    ) {
+      return;
+    }
+
+    setBonusSending(true);
+    setBonusResult(null);
+    try {
+      const result = await api('/api/admin/bonuses', {
+        token,
+        method: 'POST',
+        body: {
+          amount,
+          all: bonusAudience === 'all',
+          userIds: bonusAudience === 'selected' ? bonusSelected.map((user) => user.id) : undefined,
+          reason: 'Manual play bonus',
+        },
+      });
+      setBonusResult(result);
+      setBonusSelected([]);
+      setBonusUserSearch('');
+      setBonusUsers([]);
+      toast(`Granted ${etb(result.amount)} ETB to ${result.credited} player(s).`);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBonusSending(false);
+    }
+  }
+
   async function applyWinner(event) {
     event.preventDefault();
     try {
@@ -124,7 +205,6 @@ export default function GameControl({ token }) {
         if (!winnerUserId) throw new Error('Choose a player first.');
         body.userId = Number(winnerUserId);
       }
-      if (winnerType === 'bot') body.name = botName;
       const result = await api('/api/admin/game/next-winner', { token, method: 'POST', body });
       const where = result.scope === 'next'
         ? 'the next round'
@@ -385,6 +465,149 @@ export default function GameControl({ token }) {
         )}
       </section>
 
+      <section className="panel">
+        <div className="section-title">
+          <h3>Registration bonus</h3>
+          <span className="badge gold">Automatic · play-only</span>
+        </div>
+        <form className="settings-form" onSubmit={saveSettings}>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.registrationBonusEnabled}
+              onChange={set('registrationBonusEnabled')}
+            />
+            Give every new player a welcome bonus
+          </label>
+          <label className="field">
+            <span>Bonus per new player (ETB)</span>
+            <input
+              type="number"
+              min="0"
+              max="10000"
+              step="1"
+              value={form.registrationBonus}
+              onChange={set('registrationBonus')}
+            />
+          </label>
+          <p className="fine-print">
+            Credited once to the new player's play-only bonus balance. It can buy cards but cannot be
+            withdrawn. Existing players are not paid retroactively. The new player also receives a
+            personalized promo message from the bot. Set the amount to 0 or untick the box to stop new
+            bonuses.
+          </p>
+          <button type="submit" className="btn primary" disabled={saving}>
+            {saving ? 'Saving…' : 'Save registration bonus'}
+          </button>
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="section-title">
+          <h3>Give play bonus</h3>
+          <span className="badge gold">Play-only</span>
+        </div>
+        <form className="settings-form" onSubmit={giveBonus}>
+          <div className="field-row">
+            <label className="field">
+              <span>Amount per player (ETB)</span>
+              <input
+                type="number"
+                min="1"
+                max="10000"
+                step="1"
+                value={bonusAmount}
+                onChange={(event) => setBonusAmount(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Who gets it?</span>
+              <select
+                value={bonusAudience}
+                onChange={(event) => setBonusAudience(event.target.value)}
+              >
+                <option value="selected">Specific players</option>
+                <option value="all">All players</option>
+              </select>
+            </label>
+          </div>
+
+          {bonusAudience === 'selected' ? (
+            <>
+              <label className="field">
+                <span>Search players</span>
+                <input
+                  value={bonusUserSearch}
+                  onChange={(event) => setBonusUserSearch(event.target.value)}
+                  placeholder="Name, username, phone or Telegram ID"
+                />
+              </label>
+              {bonusSelected.length > 0 && (
+                <div className="bonus-selected">
+                  {bonusSelected.map((user) => (
+                    <span className="player-chip" key={user.id}>
+                      {user.firstName || user.username || `User ${user.id}`}
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => toggleBonusUser(user)}
+                        aria-label={`Remove ${user.firstName || user.username || user.id}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <button type="button" className="link-btn" onClick={clearBonusSelection}>
+                    Clear
+                  </button>
+                </div>
+              )}
+              {bonusUsers.length > 0 && (
+                <div className="bonus-user-list">
+                  {bonusUsers.map((user) => (
+                    <label className="check" key={user.id}>
+                      <input
+                        type="checkbox"
+                        checked={bonusSelected.some((entry) => entry.id === user.id)}
+                        onChange={() => toggleBonusUser(user)}
+                      />
+                      {user.firstName || user.username || `User ${user.id}`} · {etb(user.bonusBalance)} ETB bonus
+                    </label>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="notice">
+              This credits every non-banned player account once. Each player also receives a
+              personalized bot promo.
+            </div>
+          )}
+
+          <p className="fine-print">
+            Play-only: players can use this to buy cards, but it cannot be withdrawn. This adds to any
+            play bonus the player already has.
+          </p>
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={bonusSending || (bonusAudience === 'selected' && !bonusSelected.length)}
+          >
+            {bonusSending ? 'Giving bonus…' : 'Give bonus'}
+          </button>
+          {bonusResult && (
+            <p className="fine-print">
+              Credited {etb(bonusResult.amount)} ETB to {bonusResult.credited} player(s).{' '}
+              {bonusResult.message?.status === 'queued'
+                ? 'Promo messages are being sent in the background.'
+                : bonusResult.message?.status === 'simulated' || bonusResult.message?.simulated
+                  ? 'Telegram bot is not configured, so no promo DMs were sent.'
+                  : `Promos delivered: ${bonusResult.message?.sent ?? 0} · failed: ${bonusResult.message?.failed ?? 0}`}
+            </p>
+          )}
+        </form>
+      </section>
+
       <div className="two-col">
         <section className="panel">
           <div className="section-title">
@@ -513,7 +736,7 @@ export default function GameControl({ token }) {
             Every override is written to the audit log.
           </p>
           <div className="current-override">
-            Current: <strong>{override ? `${override.name} (${override.type})` : 'none'}</strong>
+            Current: <strong>{override ? `${override.name || 'Random bot'} (${override.type})` : 'none'}</strong>
             {override && (
               <>
                 <span className="muted small">
@@ -564,10 +787,9 @@ export default function GameControl({ token }) {
               </>
             )}
             {winnerType === 'bot' && (
-              <label className="field">
-                <span>Bot display name</span>
-                <input value={botName} onChange={(event) => setBotName(event.target.value)} maxLength={40} />
-              </label>
+              <div className="notice">
+                A random Ethiopian name is assigned automatically when the bot joins the round.
+              </div>
             )}
             <button type="submit" className="btn primary" disabled={winnerType === 'none'}>
               Set next winner

@@ -16,19 +16,13 @@ import {
   settleRound,
   totalRealStakes,
 } from './payouts.js';
-import { botSeatTarget, isBotAuto } from './bots.js';
+import { botSeatTarget, isBotAuto, randomBotName } from './bots.js';
 import { chooseForcedNumber } from './forced-draw.js';
+import { splitBonusRefund, splitBonusStake } from './registration-bonus.js';
 
 // Cards are numbered 1..432. Every number is a distinct card and a number
 // can only be bought once per round.
 export const MAX_CARDS = 432;
-
-const BOT_NAMES = [
-  'Abebe', 'Hana', 'Dawit', 'Selam', 'Yonas', 'Mimi', 'Kebede', 'Tigist', 'Bereket',
-  'Sara', 'Mulu', 'Fikru', 'Liya', 'Samuel', 'Rahel', 'Tesfaye', 'Eden', 'Nati',
-  'Bethel', 'Kalkidan', 'Henok', 'Mahi', 'Getachew', 'Tizita', 'Eyob', 'Ruth',
-  'Nahom', 'Meseret', 'Solomon', 'Beza',
-];
 
 const state = {
   current: null,
@@ -37,19 +31,6 @@ const state = {
   creating: false,
   joining: new Set(),
 };
-
-function pickBotName(used) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
-    if (!used.has(name)) {
-      used.add(name);
-      return name;
-    }
-  }
-  const fallback = `Player${Math.floor(Math.random() * 9000) + 1000}`;
-  used.add(fallback);
-  return fallback;
-}
 
 function randomPhone4() {
   return String(Math.floor(1000 + Math.random() * 9000));
@@ -275,8 +256,15 @@ async function refundStaleRounds() {
   for (const game of stale) {
     for (const p of game.players) {
       if (!p.isBot && p.userId && p.paidStake > 0) {
+        const refund = splitBonusRefund(p.paidStake, p.bonusStake);
         await prisma.$transaction([
-          prisma.user.update({ where: { id: p.userId }, data: { balance: { increment: p.paidStake } } }),
+          prisma.user.update({
+            where: { id: p.userId },
+            data: {
+              balance: { increment: refund.cashRefund },
+              bonusBalance: { increment: refund.bonusRefund },
+            },
+          }),
           prisma.transaction.create({
             data: {
               userId: p.userId,
@@ -284,7 +272,7 @@ async function refundStaleRounds() {
               amount: p.paidStake,
               status: 'completed',
               reference: `game:${game.id}`,
-              meta: 'Round interrupted by server restart',
+              meta: `Round interrupted by server restart; bonus:${refund.bonusRefund} cash:${refund.cashRefund}`,
             },
           }),
         ]);
@@ -317,7 +305,9 @@ async function resolveNextWinner() {
     }
   }
   if (parsed.type === 'bot') {
-    return { type: 'bot', name: parsed.name || 'Lucky Bot' };
+    // The display name is assigned from the Ethiopian name pool when the
+    // forced bot is seated, so old queued "Lucky Bot" names are ignored.
+    return { type: 'bot' };
   }
   return null;
 }
@@ -372,7 +362,8 @@ async function createRound() {
     const freeSlots = Array.from({ length: MAX_CARDS }, (_, i) => i + 1);
     for (let i = 0; i < botCount; i += 1) {
       const isForcedBot = forced?.type === 'bot' && i === 0;
-      const name = isForcedBot ? forced.name : pickBotName(used);
+      const name = randomBotName(used);
+      if (isForcedBot) forced.name = name;
       // Bots occupy random card numbers too, so a number stays unique per round.
       const slot = freeSlots.splice(Math.floor(Math.random() * freeSlots.length), 1)[0] || i + 1;
       const cards = [cardForSlot(round, slot)];
@@ -448,7 +439,7 @@ export async function applyWinnerToCurrentRound(override) {
     const bot = round.players.find((p) => p.isBot && !p.forced) || round.players.find((p) => p.isBot);
     if (!bot) return null;
     bot.forced = true;
-    bot.name = override.name || bot.name;
+    // Keep the bot's existing Ethiopian name; admin-supplied names are ignored.
     round.forcedWinner = { type: 'bot', name: bot.name };
   } else {
     return null;
@@ -682,8 +673,14 @@ async function finishRound(triggerPlayer, reason) {
 
   for (const p of realWinners) {
     if (!p.userId) continue;
-    const user = await prisma.user.findUnique({ where: { id: p.userId }, select: { balance: true } });
-    emitToUser(p.userId, 'balance', { balance: user?.balance ?? 0 });
+    const user = await prisma.user.findUnique({
+      where: { id: p.userId },
+      select: { balance: true, bonusBalance: true },
+    });
+    emitToUser(p.userId, 'balance', {
+      balance: user?.balance ?? 0,
+      bonusBalance: user?.bonusBalance ?? 0,
+    });
   }
 
   broadcast('game:ended', {
@@ -776,19 +773,27 @@ export async function joinRound(user, selection = []) {
   for (const slot of slots) round.taken.set(slot, user.id);
 
   const total = round.stake * slots.length;
-  let charged = false;
+  let charged = null;
   try {
     const fresh = await prisma.user.findUnique({ where: { id: user.id } });
-    if (!fresh || fresh.balance < total) {
+    const split = splitBonusStake(total, fresh?.balance, fresh?.bonusBalance);
+    if (!fresh || !split.enough) {
       throw new AppError('ቀሪ ሂሳብ በቂ አይደለም። እባክዎ መጀመሪያ ያስገቡ።');
     }
 
     const reserved = await prisma.user.updateMany({
-      where: { id: user.id, balance: { gte: total } },
-      data: { balance: { decrement: total } },
+      where: {
+        id: user.id,
+        balance: { gte: split.cashUsed },
+        bonusBalance: { gte: split.bonusUsed },
+      },
+      data: {
+        balance: { decrement: split.cashUsed },
+        bonusBalance: { decrement: split.bonusUsed },
+      },
     });
     if (reserved.count === 0) throw new AppError('ቀሪ ሂሳብ በቂ አይደለም። እባክዎ መጀመሪያ ያስገቡ።');
-    charged = true;
+    charged = split;
 
     // The window may have closed while the balance was being checked.
     if (round.status !== 'WAITING' || Date.now() >= round.waitEndsAt) {
@@ -806,9 +811,14 @@ export async function joinRound(user, selection = []) {
       player.autoMark = fresh.autoMark !== false;
       if (player.autoMark) markCalledNumbers(player.cards, player.marks, round.called);
       player.paidStake += total;
+      player.bonusStake = (player.bonusStake || 0) + split.bonusUsed;
       await prisma.gamePlayer.update({
         where: { id: player.id },
-        data: { cards: JSON.stringify(player.cards), paidStake: player.paidStake },
+        data: {
+          cards: JSON.stringify(player.cards),
+          paidStake: player.paidStake,
+          bonusStake: player.bonusStake,
+        },
       });
     } else {
       const row = await prisma.gamePlayer.create({
@@ -817,6 +827,7 @@ export async function joinRound(user, selection = []) {
           userId: user.id,
           cards: JSON.stringify(generated),
           paidStake: total,
+          bonusStake: split.bonusUsed,
         },
       });
       player = {
@@ -831,6 +842,7 @@ export async function joinRound(user, selection = []) {
         marks: emptyMarks(generated),
         autoMark: fresh.autoMark !== false,
         paidStake: total,
+        bonusStake: split.bonusUsed,
         claimAt: 0,
         claimed: false,
         forced: false,
@@ -845,6 +857,7 @@ export async function joinRound(user, selection = []) {
         amount: total,
         status: 'completed',
         reference: `game:${round.id}`,
+        meta: `bonus:${split.bonusUsed} cash:${split.cashUsed}`,
       },
     });
     await prisma.user.update({
@@ -865,8 +878,14 @@ export async function joinRound(user, selection = []) {
     );
     player.commissionTxIds = [...previousCommissionTxIds, ...commissionTxIds];
 
-    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { balance: true } });
-    emitToUser(user.id, 'balance', { balance: updated.balance });
+    const updated = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { balance: true, bonusBalance: true },
+    });
+    emitToUser(user.id, 'balance', {
+      balance: updated.balance,
+      bonusBalance: updated.bonusBalance,
+    });
     emitToUser(user.id, 'you', getPlayerView(round, user.id));
     broadcastAll();
 
@@ -876,6 +895,7 @@ export async function joinRound(user, selection = []) {
       slots: player.slots,
       spent: player.paidStake,
       balance: updated.balance,
+      bonusBalance: updated.bonusBalance,
       prizePool: round.prizePool,
       you: getPlayerView(round, user.id),
     };
@@ -885,7 +905,13 @@ export async function joinRound(user, selection = []) {
     }
     if (charged) {
       await prisma.user
-        .update({ where: { id: user.id }, data: { balance: { increment: total } } })
+        .update({
+          where: { id: user.id },
+          data: {
+            balance: { increment: charged.cashUsed },
+            bonusBalance: { increment: charged.bonusUsed },
+          },
+        })
         .catch(() => {});
     }
     throw err;
@@ -926,7 +952,9 @@ export async function deselectCard(user, cardNumber) {
     const nextSlots = (player.slots || []).filter((_slot, index) => index !== cardIndex);
     const nextMarks = ensureMarks(player).filter((_mark, index) => index !== cardIndex);
     const refund = Math.min(round.stake, Math.max(0, player.paidStake || 0));
+    const refundSplit = splitBonusRefund(refund, player.bonusStake || 0);
     const nextPaid = Math.max(0, (player.paidStake || 0) - refund);
+    const nextBonusStake = Math.max(0, (player.bonusStake || 0) - refundSplit.bonusRefund);
     const playerIndex = round.players.indexOf(player);
     const nextPool = computePayout({
       stakes: projectedPrizeStakes({
@@ -945,7 +973,11 @@ export async function deselectCard(user, cardNumber) {
       if (nextCards.length) {
         await tx.gamePlayer.update({
           where: { id: player.id },
-          data: { cards: JSON.stringify(nextCards), paidStake: nextPaid },
+          data: {
+            cards: JSON.stringify(nextCards),
+            paidStake: nextPaid,
+            bonusStake: nextBonusStake,
+          },
         });
       } else {
         await tx.gamePlayer.delete({ where: { id: player.id } });
@@ -953,7 +985,10 @@ export async function deselectCard(user, cardNumber) {
       if (refund > 0) {
         await tx.user.update({
           where: { id: user.id },
-          data: { balance: { increment: refund } },
+          data: {
+            balance: { increment: refundSplit.cashRefund },
+            bonusBalance: { increment: refundSplit.bonusRefund },
+          },
         });
         await tx.transaction.create({
           data: {
@@ -962,7 +997,7 @@ export async function deselectCard(user, cardNumber) {
             amount: refund,
             status: 'completed',
             reference: `game:${round.id}`,
-            meta: `Card #${slot} deselected`,
+            meta: `Card #${slot} deselected; bonus:${refundSplit.bonusRefund} cash:${refundSplit.cashRefund}`,
           },
         });
       }
@@ -974,6 +1009,7 @@ export async function deselectCard(user, cardNumber) {
     player.slots = nextSlots;
     player.marks = nextMarks;
     player.paidStake = nextPaid;
+    player.bonusStake = nextBonusStake;
     player.commissionTxIds = nextCommissionTxIds;
     if (!nextCards.length && playerIndex >= 0) round.players.splice(playerIndex, 1);
     round.prizePool = nextPool;
@@ -985,13 +1021,26 @@ export async function deselectCard(user, cardNumber) {
       });
     }
 
-    const updated = await prisma.user.findUnique({ where: { id: user.id }, select: { balance: true } });
+    const updated = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { balance: true, bonusBalance: true },
+    });
     const view = getPlayerView(round, user.id);
-    emitToUser(user.id, 'balance', { balance: updated?.balance ?? 0 });
+    emitToUser(user.id, 'balance', {
+      balance: updated?.balance ?? 0,
+      bonusBalance: updated?.bonusBalance ?? 0,
+    });
     emitToUser(user.id, 'you', view);
     broadcastAll();
 
-    return { ok: true, card: slot, you: view, balance: updated?.balance ?? 0, prizePool: round.prizePool };
+    return {
+      ok: true,
+      card: slot,
+      you: view,
+      balance: updated?.balance ?? 0,
+      bonusBalance: updated?.bonusBalance ?? 0,
+      prizePool: round.prizePool,
+    };
   } finally {
     state.joining.delete(user.id);
   }

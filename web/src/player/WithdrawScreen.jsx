@@ -86,6 +86,11 @@ export default function WithdrawScreen({ me, token, refreshMe }) {
         </div>
         <span className="badge">Min {etbShort(minWithdraw)} ETB</span>
       </section>
+      {Number(me?.user?.bonusBalance) > 0 && (
+        <p className="fine-print">
+          Play-only bonus of {etb(me.user.bonusBalance)} ETB cannot be withdrawn; use it to buy cards.
+        </p>
+      )}
 
       {pending && (
         <div className="notice">

@@ -19,6 +19,7 @@ model User {
   firstName         String?
   phone             String?
   balance           Int                @default(0)
+  bonusBalance      Int                @default(0) // play-only; cannot be withdrawn
   derash            Int                @default(0)
   role              String             @default("player") // player | agent | admin
   referredByAgentId Int?
@@ -139,6 +140,7 @@ model GamePlayer {
   isWinner  Boolean   @default(false)
   winAmount Int       @default(0)
   paidStake Int       @default(0)
+  bonusStake Int      @default(0) // part of paidStake funded by play-only bonus
   joinedAt  DateTime  @default(now())
   game      Game      @relation(fields: [gameId], references: [id])
   user      User?     @relation(fields: [userId], references: [id])
@@ -160,7 +162,7 @@ model CalledNumber {
 model Transaction {
   id        Int      @id @default(autoincrement())
   userId    Int
-  type      String // deposit | withdrawal | stake | win | adjustment | refund
+  type      String // deposit | withdrawal | stake | win | bonus | adjustment | refund
   amount    Int // positive except audited manual adjustments
   status    String   @default("completed") // completed | pending | rejected
   reference String?

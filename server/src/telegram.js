@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
 import { linkReferral } from './agents.js';
+import { createRegisteredUser, playBonusText, registrationBonusText } from './registration-bonus.js';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '');
@@ -38,23 +39,76 @@ function cleanPhone(value) {
   return String(value || '').replace(/[^\d+]/g, '').slice(0, 20);
 }
 
+/** Send the personalized welcome-bonus promo through the bot. */
+export async function sendRegistrationBonusMessage({ telegramId, firstName, amountSantim }) {
+  if (!BOT_TOKEN) return { sent: false, simulated: true };
+  if (!/^-?\d+$/.test(String(telegramId || ''))) {
+    return { sent: false, simulated: false, reason: 'no_telegram_chat' };
+  }
+  await telegramApi('sendMessage', {
+    chat_id: String(telegramId),
+    text: registrationBonusText(firstName, amountSantim),
+    reply_markup: openAppMarkup(),
+  });
+  return { sent: true, simulated: false };
+}
+
+/** Send a promo DM for a manual admin bonus. */
+export async function sendPlayBonusMessage({ telegramId, firstName, amountSantim }) {
+  if (!BOT_TOKEN) return { sent: false, simulated: true };
+  if (!/^-?\d+$/.test(String(telegramId || ''))) {
+    return { sent: false, simulated: false, reason: 'no_telegram_chat' };
+  }
+  await telegramApi('sendMessage', {
+    chat_id: String(telegramId),
+    text: playBonusText(firstName, amountSantim),
+    reply_markup: openAppMarkup(),
+  });
+  return { sent: true, simulated: false };
+}
+
+/** Deliver manual bonus promos slowly enough for Telegram's rate limits. */
+export async function sendPlayBonusMessages(users, amountSantim) {
+  if (!BOT_TOKEN) {
+    return { sent: 0, failed: 0, total: users.length, simulated: true };
+  }
+  let sent = 0;
+  let failed = 0;
+  for (const user of users) {
+    try {
+      const result = await sendPlayBonusMessage({
+        telegramId: user.telegramId,
+        firstName: user.firstName,
+        amountSantim,
+      });
+      if (result.sent) sent += 1;
+      else failed += 1;
+    } catch {
+      failed += 1;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  return { sent, failed, total: users.length, simulated: false };
+}
+
 async function registerStartUser(from, startParam) {
   const telegramId = String(from.id);
   let user = await prisma.user.findUnique({ where: { telegramId } });
+  let bonus = 0;
   if (!user) {
-    user = await prisma.user.create({
-      data: {
-        telegramId,
-        firstName: from.first_name || 'Player',
-        username: from.username || null,
-      },
+    const created = await createRegisteredUser({
+      telegramId,
+      firstName: from.first_name,
+      username: from.username,
     });
+    user = created.user;
+    bonus = created.bonus;
   }
   if (startParam && !user.referredByAgentId) {
     await linkReferral(user, startParam);
     user = await prisma.user.findUnique({ where: { id: user.id } });
   }
-  return user;
+  return { user, bonus };
 }
 
 async function handleStart(message) {
@@ -62,7 +116,7 @@ async function handleStart(message) {
   const startParam = String(message.text || '').split(/\s+/)[1]?.trim() || '';
   if (startParam) pendingReferrals.set(chatId, startParam);
 
-  const user = await registerStartUser(message.from, startParam);
+  const { user, bonus } = await registerStartUser(message.from, startParam);
   if (user?.phone) {
     await telegramApi('sendMessage', {
       chat_id: chatId,
@@ -84,6 +138,14 @@ async function handleStart(message) {
       one_time_keyboard: true,
     },
   });
+
+  if (bonus > 0) {
+    await sendRegistrationBonusMessage({
+      telegramId: user.telegramId,
+      firstName: user.firstName,
+      amountSantim: bonus,
+    }).catch((err) => console.error('[telegram] registration bonus message failed', err.message));
+  }
 }
 
 async function handleContact(message) {
@@ -91,20 +153,27 @@ async function handleContact(message) {
   const telegramId = String(message.from.id);
   const phone = cleanPhone(message.contact?.phone_number);
 
-  const user = await prisma.user.upsert({
-    where: { telegramId },
-    update: {
-      phone: phone || undefined,
-      firstName: message.from.first_name || message.contact?.first_name || undefined,
-      username: message.from.username || undefined,
-    },
-    create: {
+  let user = await prisma.user.findUnique({ where: { telegramId } });
+  let bonus = 0;
+  if (user) {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        phone: phone || undefined,
+        firstName: message.from.first_name || message.contact?.first_name || undefined,
+        username: message.from.username || undefined,
+      },
+    });
+  } else {
+    const created = await createRegisteredUser({
       telegramId,
       phone: phone || null,
-      firstName: message.from.first_name || message.contact?.first_name || 'Player',
-      username: message.from.username || null,
-    },
-  });
+      firstName: message.from.first_name || message.contact?.first_name,
+      username: message.from.username,
+    });
+    user = created.user;
+    bonus = created.bonus;
+  }
 
   const startParam = pendingReferrals.get(chatId) || '';
   if (startParam) {
@@ -125,6 +194,14 @@ async function handleContact(message) {
       '✅ Your phone number is registered. Tap below to open Ethio Bingo.',
     reply_markup: openAppMarkup(startParam),
   });
+
+  if (bonus > 0) {
+    await sendRegistrationBonusMessage({
+      telegramId: user.telegramId,
+      firstName: user.firstName,
+      amountSantim: bonus,
+    }).catch((err) => console.error('[telegram] registration bonus message failed', err.message));
+  }
 }
 
 async function handleUpdate(update) {

@@ -28,12 +28,13 @@ export const txLabel = {
   withdrawal: 'Withdrawal',
   stake: 'Stake',
   win: 'Win',
+  bonus: 'Play bonus',
   adjustment: 'Adjustment',
   refund: 'Refund',
 };
 
 export const txSign = (tx) => {
-  if (tx.type === 'deposit' || tx.type === 'win' || tx.type === 'refund') return '+';
+  if (tx.type === 'deposit' || tx.type === 'win' || tx.type === 'bonus' || tx.type === 'refund') return '+';
   if (tx.type === 'withdrawal' || tx.type === 'stake') return '−';
   return tx.amount >= 0 ? '+' : '−';
 };

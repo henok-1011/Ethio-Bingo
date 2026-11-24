@@ -48,6 +48,7 @@ router.get(
         firstName: req.user.firstName,
         phone: req.user.phone,
         balance: req.user.balance,
+        bonusBalance: req.user.bonusBalance,
         derash: req.user.derash,
         role: req.user.role,
         isBanned: req.user.isBanned,

@@ -7,6 +7,8 @@ import { prisma } from './db.js';
  */
 export const DEFAULT_SETTINGS = {
   stake: '2000', // 20 ETB entry fee
+  registrationBonusEnabled: '1', // welcome bonus for newly created players
+  registrationBonus: '5000', // 50 ETB, stored in santim
   botCount: '8',
   botAuto: '1', // auto-adjust bots (max 50); manual uses botCount exactly with no cap
   waitSeconds: '30', // card selection window

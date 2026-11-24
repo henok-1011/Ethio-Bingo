@@ -131,6 +131,13 @@ export default function WalletScreen({ me, token, refreshMe }) {
         <div className="balance-sub">
           <span>Ethio Bingo player account</span>
         </div>
+        {Number(me?.user?.bonusBalance) > 0 && (
+          <div className="balance-sub bonus-note">
+            <span>
+              Play-only bonus: {etb(me.user.bonusBalance)} ETB · can buy cards, cannot be withdrawn
+            </span>
+          </div>
+        )}
         {me?.pendingDeposits > 0 && (
           <div className="notice">You have {me.pendingDeposits} deposit(s) waiting for manual review.</div>
         )}
@@ -250,7 +257,7 @@ export default function WalletScreen({ me, token, refreshMe }) {
             {transactions.map((tx) => (
               <div className="tx-row" key={tx.id}>
                 <span className={`tx-icon ${tx.type}`}>
-                  {tx.type === 'deposit' ? '↓' : tx.type === 'withdrawal' ? '↑' : tx.type === 'win' ? '🏆' : tx.type === 'stake' ? '🎱' : '•'}
+                  {tx.type === 'deposit' ? '↓' : tx.type === 'withdrawal' ? '↑' : tx.type === 'win' ? '🏆' : tx.type === 'bonus' ? '🎁' : tx.type === 'stake' ? '🎱' : '•'}
                 </span>
                 <div className="tx-main">
                   <strong>{txLabel[tx.type] || tx.type}</strong>

@@ -145,6 +145,7 @@ export default function Users({ token, phoneFilter, onPhoneFilterChange }) {
                 <th>Phone</th>
                 <th>Telegram</th>
                 <th>Balance</th>
+                <th>Bonus</th>
                 <th>Derash</th>
                 <th>Agent</th>
                 <th>Status</th>
@@ -165,6 +166,10 @@ export default function Users({ token, phoneFilter, onPhoneFilterChange }) {
                   </td>
                   <td>
                     <strong>{etb(user.balance)} ETB</strong>
+                  </td>
+                  <td>
+                    <strong>{etb(user.bonusBalance)} ETB</strong>
+                    <div className="muted small">play-only</div>
                   </td>
                   <td>{user.derash}</td>
                   <td>
@@ -201,7 +206,7 @@ export default function Users({ token, phoneFilter, onPhoneFilterChange }) {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="muted">
+                  <td colSpan={9} className="muted">
                     No users found.
                   </td>
                 </tr>
@@ -226,6 +231,10 @@ export default function Users({ token, phoneFilter, onPhoneFilterChange }) {
             <div>
               <span className="muted small">Balance</span>
               <strong>{etb(detail.user.balance)} ETB</strong>
+            </div>
+            <div>
+              <span className="muted small">Play-only bonus</span>
+              <strong>{etb(detail.user.bonusBalance)} ETB</strong>
             </div>
             <div>
               <span className="muted small">Derash</span>
