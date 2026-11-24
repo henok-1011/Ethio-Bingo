@@ -122,12 +122,13 @@ npm start          # http://localhost:4000
   `callIntervalMs`) → `ENDED` (result + next-round countdown).
 - The server owns the shuffled deck, cards, calls and validation. A false claim blocks that player
   for the rest of the round; repeated claims return an error.
-- Payout: the **advertised pot** counts every occupied seat (real cards and bot seats), so the
-  player-facing figures can include bot money. Settlement uses **real cash only**: the platform
-  keeps the fee (`platformFeeRate`, 20% by default) of the real stakes and the remainder is the
-  prize pool. All real players with at least two completed patterns when the round ends split that
-  pool equally (cents are floored). A bot may trigger the end of the round, but **bots never receive
-  real money and never fund a payout** — only real winners are credited.
+- Payout: the **advertised pot** counts every occupied seat (real cards and bot seats) and is the
+  amount paid when a real player wins. The platform keeps its fee (`platformFeeRate`, 20% by
+  default) on real stakes; any bot-funded part of the pot is a platform top-up, recorded as a
+  negative platform fee. All real players with at least two completed patterns when the round ends
+  split the **whole advertised pot** (remainder santim go to the first winners). A bot may trigger
+  the end of the round, but **bots never receive real money**; if only bots win, no real payout is
+  made.
 - Bots join each round per admin setting with random names and cards. Auto mode varies the
   baseline and never exceeds 50 bots; manual mode uses the exact count entered with no 50-bot cap
   and keeps that count for the round. They claim with a 1.5–4 s human-like delay. With a forced

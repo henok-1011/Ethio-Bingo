@@ -114,7 +114,7 @@ model Game {
   stake           Int
   status          String        @default("WAITING") // WAITING | CALLING | ENDED
   prizePool       Int           @default(0)
-  platformFee     Int           @default(0)
+  platformFee     Int           @default(0) // net of bot-funded top-ups; may be negative
   botCount        Int           @default(0)
   forcedWinnerId  Int?
   forcedWinnerType String?

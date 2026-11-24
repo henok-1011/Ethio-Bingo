@@ -1,14 +1,12 @@
 /**
  * Payout math for a finished round. Money is integer santim.
  *
- * Two different pots exist:
- * - the player-facing pot (`totalPrizeStakes` / `projectedPrizeStakes`), which
- *   counts every occupied seat and may include bot seats;
- * - the real pot (`totalRealStakes`), which is the money actually collected.
- *
- * Settlement only ever uses the real pot: the platform keeps `platformFeeRate`
- * of it and the rest is split evenly between the real (non-bot) players who
- * completed at least two winning patterns. Bot seats never fund a payout.
+ * The player-facing pot (`totalPrizeStakes` / `projectedPrizeStakes`) counts
+ * every occupied seat and may include bot seats. That advertised figure is the
+ * platform's payout commitment: when a real player wins, settlement pays the
+ * whole pot to the real winner(s). The platform keeps its fee on real stakes;
+ * if bot seats funded part of the pot, the difference is recorded as a
+ * negative platform fee (a platform top-up). Bot wins still pay nothing.
  */
 export function computePayout({ stakes, platformFeeRate, realWinnerCount }) {
   const safeStakes = Math.max(0, Math.floor(Number(stakes) || 0));
@@ -22,25 +20,31 @@ export function computePayout({ stakes, platformFeeRate, realWinnerCount }) {
   return { pool, platformFee, share };
 }
 
-/**
- * Settle a finished round against real money only.
- *
- * `cashStakes` is the real money actually collected from players. The
- * player-facing pot may include bot seats, so it never enters this
- * calculation: a real winner is paid `1 - platformFeeRate` of the real cash and
- * the platform keeps the remainder. A round with no real winner has no prize
- * pool, so the platform keeps all of the real cash.
- */
-export function settleRound({ cashStakes, platformFeeRate, realWinnerCount }) {
-  const safeCash = Math.max(0, Math.floor(Number(cashStakes) || 0));
-  const winners = Math.max(0, Math.floor(Number(realWinnerCount) || 0));
-  if (winners === 0) return { pool: 0, platformFee: safeCash, share: 0 };
+function splitPrize(pool, winners) {
+  const base = Math.floor(pool / winners);
+  const remainder = pool % winners;
+  return Array.from({ length: winners }, (_, index) => base + (index < remainder ? 1 : 0));
+}
 
-  const result = computePayout({ stakes: safeCash, platformFeeRate, realWinnerCount: winners });
-  const paid = result.share * winners;
-  // Settlement rounding remainders stay with the platform, so the fee is
-  // always at least `platformFeeRate` of the real cash and never negative.
-  return { ...result, platformFee: safeCash - paid };
+/**
+ * Settle a finished round against its advertised prize pot.
+ *
+ * `prizePool` is the figure shown to players during the round. A round with
+ * real winners pays that full pot, split as evenly as possible among them.
+ * `cashStakes` is only what was actually collected from real players, so a
+ * bot-funded pot produces a negative `platformFee`: the platform is covering
+ * the difference. If only bots win, no real payout is made and the platform
+ * keeps the real cash.
+ */
+export function settleRound({ cashStakes, prizePool, realWinnerCount }) {
+  const safeCash = Math.max(0, Math.floor(Number(cashStakes) || 0));
+  const advertisedPot = Math.max(0, Math.floor(Number(prizePool) || 0));
+  const winners = Math.max(0, Math.floor(Number(realWinnerCount) || 0));
+  if (winners === 0) return { pool: 0, platformFee: safeCash, shares: [] };
+
+  const shares = splitPrize(advertisedPot, winners);
+  const paid = shares.reduce((sum, share) => sum + share, 0);
+  return { pool: advertisedPot, platformFee: safeCash - paid, shares };
 }
 
 export function totalRealStakes(players) {

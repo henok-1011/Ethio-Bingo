@@ -54,7 +54,7 @@ export default function Overview({ token, onNavigate }) {
         <Stat
           label="Platform revenue"
           value={money(t.platformFees)}
-          hint="Fees plus stakes retained when no real winner"
+          hint="Fees net of bot-funded prize top-ups, plus stakes kept when no real winner"
           tone="green"
         />
         <Stat label="Agent commissions" value={money(t.agentCommissions)} hint="0.50 ETB per referred card purchase" />

@@ -36,24 +36,24 @@ test('bots winning means no payout and the pool stays whole', () => {
 });
 
 test('a round without a real winner keeps all real stakes as platform revenue', () => {
-  const result = settleRound({ cashStakes: 4000, platformFeeRate: 0.2, realWinnerCount: 0 });
+  const result = settleRound({ cashStakes: 4000, prizePool: 3200, realWinnerCount: 0 });
   assert.equal(result.pool, 0);
   assert.equal(result.platformFee, 4000);
-  assert.equal(result.share, 0);
+  assert.deepEqual(result.shares, []);
 });
 
-test('a round with real winners settles the normal fee and pool', () => {
-  const result = settleRound({ cashStakes: 4000, platformFeeRate: 0.2, realWinnerCount: 2 });
+test('a round with real winners pays out the advertised pot', () => {
+  const result = settleRound({ cashStakes: 4000, prizePool: 3200, realWinnerCount: 2 });
   assert.equal(result.pool, 3200);
   assert.equal(result.platformFee, 800);
-  assert.equal(result.share, 1600);
+  assert.deepEqual(result.shares, [1600, 1600]);
 });
 
 test('platform revenue is 20% of real cash even with several real winners', () => {
-  const result = settleRound({ cashStakes: 6000, platformFeeRate: 0.2, realWinnerCount: 2 });
+  const result = settleRound({ cashStakes: 6000, prizePool: 4800, realWinnerCount: 2 });
   assert.equal(result.pool, 4800);
   assert.equal(result.platformFee, 1200);
-  assert.equal(result.share, 2400);
+  assert.deepEqual(result.shares, [2400, 2400]);
 });
 
 test('odd pools round down so the platform never pays more than it took', () => {
@@ -119,38 +119,38 @@ test('a bot-only win settles without paying any cash', () => {
   // 4 real stakes plus 2 bot seats; the bot wins and no real player is paid.
   const result = settleRound({
     cashStakes: 4000,
-    platformFeeRate: 0.2,
+    prizePool: 14400,
     realWinnerCount: 0,
   });
   assert.equal(result.pool, 0);
-  assert.equal(result.share, 0);
+  assert.deepEqual(result.shares, []);
   assert.equal(result.platformFee, 4000);
 });
 
-test('bot seats never fund a real payout or the platform revenue', () => {
-  // 1 real player at 20 ETB plus 8 bot seats: the advertised pot is 180 ETB,
-  // but only the 20 ETB of real cash may be settled and taxed.
+test('the advertised pot is paid in full when bot seats funded most of it', () => {
+  // 1 real player at 20 ETB plus 8 bot seats: the advertised pot is 144 ETB.
+  // The winner receives the full advertised amount; the platform covers the
+  // 124 ETB that the bot seats did not contribute in cash.
   const result = settleRound({
     cashStakes: 2000,
-    platformFeeRate: 0.2,
+    prizePool: 14400,
     realWinnerCount: 1,
   });
-  assert.equal(result.pool, 1600);
-  assert.equal(result.share, 1600);
-  assert.equal(result.platformFee, 400);
+  assert.equal(result.pool, 14400);
+  assert.deepEqual(result.shares, [14400]);
+  assert.equal(result.platformFee, -12400);
 });
 
-test('platform revenue is always 20% of real cash, never floored away', () => {
-  // Same shape as a bot-inflated round: real cash 40 ETB next to a 60 ETB
-  // advertised pot. The fee must still be 8 ETB, not zero.
+test('remainder santim are paid so shares equal the whole pot', () => {
+  // 40 ETB real cash, 32.01 ETB advertised pot, two winners.
   const result = settleRound({
     cashStakes: 4000,
-    platformFeeRate: 0.2,
-    realWinnerCount: 1,
+    prizePool: 3201,
+    realWinnerCount: 2,
   });
-  assert.equal(result.pool, 3200);
-  assert.equal(result.share, 3200);
-  assert.equal(result.platformFee, 800);
+  assert.deepEqual(result.shares, [1601, 1600]);
+  assert.equal(result.shares.reduce((sum, share) => sum + share, 0), result.pool);
+  assert.equal(result.platformFee, 799);
 });
 
 test('a generated card has 12 ways to win and a free centre', () => {

@@ -587,38 +587,40 @@ async function finishRound(triggerPlayer, reason) {
 
   const realWinners = winners.filter((p) => !p.isBot);
   const realStakes = totalRealStakes(round.players);
-  // Settlement runs on real cash only. Bot seats inflate the advertised pot
-  // the player sees during the round, but they never fund a payout and never
-  // become platform revenue.
-  const { pool, platformFee, share } = settleRound({
+  const offeredPool = Math.max(
+    0,
+    Math.floor(Number(round.offeredPrizePool ?? round.prizePool) || 0),
+  );
+  // The pot advertised at kickoff is the payout commitment. It includes bot
+  // seats; any part they funded is a platform top-up, recorded as a negative
+  // platform fee. Only real winners are credited.
+  const { pool, platformFee, shares } = settleRound({
     cashStakes: realStakes,
-    platformFeeRate: settings.platformFeeRate,
+    prizePool: offeredPool,
     realWinnerCount: realWinners.length,
   });
   // This map is the single source of truth for the amount shown on the
   // winner card, stored on the player row, credited to the wallet, and
-  // written to the transaction history. It is the real-cash share, never a
-  // bot-funded amount.
-  const winnerPayouts = new Map(realWinners.map((p) => [p.id, share]));
+  // written to the transaction history.
+  const winnerPayouts = new Map(realWinners.map((p, index) => [p.id, shares[index] || 0]));
 
   // Bots never own money: a bot winner gets no wallet credit or transaction. A
-  // real winner is shown exactly the real-cash share that is credited to them.
+  // real winner is shown exactly the share of the advertised pot credited to them.
   // If a real player won, show only the real winner(s) so a bot is never
   // exposed as a co-winner; a bot-only win keeps the advertised pot on its
   // result card as a cosmetic figure.
   const visibleWinners = realWinners.length ? realWinners : winners;
-  const displayShare = realWinners.length
-    ? share
-    : visibleWinners.length
-      ? Math.floor(round.prizePool / visibleWinners.length)
-      : 0;
   round.winners = visibleWinners.map((p) => {
     const winning = winnerCardFor(p);
     return {
       name: p.name,
       phone4: phone4From(p.phone),
       phoneMasked: maskPhone(p.phone),
-      amount: displayShare,
+      amount: realWinners.length
+        ? winnerPayouts.get(p.id) || 0
+        : visibleWinners.length
+          ? Math.floor(offeredPool / visibleWinners.length)
+          : 0,
       cardNumber: winning?.cardNumber || 1,
       card: winning?.card || null,
       line: winning?.line || null,
@@ -627,7 +629,7 @@ async function finishRound(triggerPlayer, reason) {
   });
   round.winnerIds = visibleWinners.map((p) => p.id);
   round.payouts = Object.fromEntries(winnerPayouts);
-  round.offeredPrizePool = round.prizePool;
+  round.offeredPrizePool = offeredPool;
   round.prizePool = pool;
   round.nextRoundAt = Date.now() + Math.max(2000, Number(settings.roundEndDelayMs));
 
