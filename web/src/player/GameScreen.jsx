@@ -323,6 +323,17 @@ export default function GameScreen({
             ? 'ዙሩ ተጠናቅቋል። ቀጣዩን ይጠብቁ።'
             : 'መልካም እድል!';
 
+  const claimButton = isCalling && you ? (
+    <button
+      type="button"
+      className={`jo-cta jo-claim-under ${you.hasBingo ? 'ready' : ''}`}
+      disabled={busy || hasPendingMarks || autoMarkBusy}
+      onClick={onClaim}
+    >
+      {you.hasBingo ? 'BINGO! አሁን ይጠይቁ' : 'BINGO!'}
+    </button>
+  ) : null;
+
   const cardsSection = showCards ? (
     <section className="my-cards jo-cards">
       <div className="section-title">
@@ -392,6 +403,7 @@ export default function GameScreen({
           );
         })}
       </div>
+      {claimButton}
       {!autoMarkOn && isCalling ? (
         <p className="jo-manual-note amharic">
           Auto Marking OFF — የተጠራውን ቁጥር በካርድዎ ላይ ይንኩ።
@@ -749,16 +761,6 @@ export default function GameScreen({
         <div className="jo-bottom">
           <div className="jo-timer">{timerLabel}</div>
           <div className="jo-status">{statusText}</div>
-          {isCalling && you ? (
-            <button
-              type="button"
-              className={`jo-cta ${you.hasBingo ? 'ready' : ''}`}
-              disabled={busy || hasPendingMarks || autoMarkBusy}
-              onClick={onClaim}
-            >
-              {you.hasBingo ? 'BINGO! አሁን ይጠይቁ' : 'BINGO!'}
-            </button>
-          ) : null}
         </div>
 
         <div className="jo-footer">Ethio Bingo · መልካም እድል</div>

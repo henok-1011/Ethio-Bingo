@@ -175,3 +175,56 @@ test('returns null when there is no forced player or no matching card number', (
     null,
   );
 });
+
+test('a planned forced win is held back until its target call', () => {
+  const forced = player(1, FORCED_CARD);
+  const called = new Set([1, 2, 3, 4, 5, 17, 49]);
+
+  // 65 would complete the forced player immediately; 16 is still safe.
+  assert.equal(cardHasBingo(forced.cards, new Set([...called, 65])), true);
+
+  const early = chooseForcedNumber({
+    deck: [65, 16],
+    called,
+    players: [forced],
+    forcedPlayer: forced,
+    targetCalled: 30,
+    warmupCalls: 18,
+  });
+
+  assert.notEqual(early, 65);
+  assert.equal(cardHasBingo(forced.cards, new Set([...called, early])), false);
+});
+
+test('a planned forced win completes when the target call arrives', () => {
+  const forced = player(1, FORCED_CARD);
+  const called = new Set([1, 2, 3, 4, 5, 17, 49]);
+
+  const winning = chooseForcedNumber({
+    deck: [65, 16],
+    called,
+    players: [forced],
+    forcedPlayer: forced,
+    targetCalled: 8,
+    warmupCalls: 0,
+  });
+
+  assert.equal(winning, 65);
+  assert.equal(cardHasBingo(forced.cards, new Set([...called, winning])), true);
+});
+
+test('the warm-up can draw a number outside the forced card', () => {
+  const forced = player(1, FORCED_CARD);
+  const called = new Set([1, 2, 3, 4, 5, 17, 49]);
+
+  const number = chooseForcedNumber({
+    deck: [6],
+    called,
+    players: [forced],
+    forcedPlayer: forced,
+    targetCalled: 30,
+    warmupCalls: 18,
+  });
+
+  assert.equal(number, 6);
+});

@@ -22,17 +22,36 @@ export function botSeatTarget(settings = {}, random = Math.random) {
   return min + Math.floor(random() * (max - min + 1));
 }
 
-// Real Ethiopian names, split into first and family names so the bots have a
+/**
+ * Spreads bot card purchases across the waiting window instead of seating the
+ * whole table the instant the picker opens. The last purchase still lands a
+ * little before the window closes so every planned bot can be locked in.
+ */
+export function botJoinDelays(count, windowMs, random = Math.random) {
+  const total = Math.max(0, Math.floor(Number(count) || 0));
+  const window = Math.max(0, Number(windowMs) || 0);
+  if (!total || !window) return [];
+
+  const first = Math.min(3200, window * 0.12);
+  const last = Math.max(first, window - Math.min(3500, window * 0.2));
+  const span = Math.max(0, last - first);
+  const step = span / total;
+  return Array.from({ length: total }, (_, index) => {
+    const jitter = (Math.max(0, Math.min(1, random())) - 0.5) * step * 0.7;
+    return Math.max(0, first + step * (index + 0.5) + jitter);
+  });
+}
+
+// Real male Ethiopian first names, paired with family names so the bots have a
 // large enough pool to avoid synthetic labels like "Player1234".
 const BOT_FIRST_NAMES = [
-  'Abebe', 'Hana', 'Dawit', 'Selam', 'Yonas', 'Mimi', 'Kebede', 'Tigist', 'Bereket',
-  'Sara', 'Mulu', 'Fikru', 'Liya', 'Samuel', 'Rahel', 'Tesfaye', 'Eden', 'Nati',
-  'Bethel', 'Kalkidan', 'Henok', 'Mahi', 'Getachew', 'Tizita', 'Eyob', 'Ruth',
-  'Nahom', 'Meseret', 'Solomon', 'Beza', 'Almaz', 'Aster', 'Birtukan', 'Chala',
-  'Daniel', 'Desta', 'Endale', 'Frehiwot', 'Genet', 'Girma', 'Hailu', 'Hanna',
-  'Kidist', 'Lidiya', 'Mekdes', 'Meron', 'Nebiyu', 'Rediet', 'Saron', 'Tekle',
-  'Wubit', 'Yared', 'Yohannes', 'Zewditu', 'Amanuel', 'Bethlehem', 'Fikirte',
-  'Jerusalem', 'Natnael', 'Tsion',
+  'Abebe', 'Abel', 'Abrham', 'Addisu', 'Alemayehu', 'Amanuel', 'Amare', 'Ayele',
+  'Bekele', 'Bereket', 'Binyam', 'Biruk', 'Chala', 'Dagmawi', 'Daniel', 'Dawit',
+  'Endale', 'Eyob', 'Fasil', 'Fikru', 'Gebre', 'Getachew', 'Girma', 'Girmay',
+  'Habte', 'Hagos', 'Haile', 'Hailu', 'Henok', 'Kidane', 'Lemma', 'Mamo',
+  'Mekonnen', 'Meles', 'Mengistu', 'Mulugeta', 'Nahom', 'Natnael', 'Nebiyu',
+  'Negash', 'Negusse', 'Petros', 'Robel', 'Samuel', 'Solomon', 'Tadesse', 'Tekle',
+  'Tesfaye', 'Tewodros', 'Tomas', 'Worku', 'Yared', 'Yohannes', 'Yonas', 'Zewdu',
 ];
 
 const BOT_LAST_NAMES = [

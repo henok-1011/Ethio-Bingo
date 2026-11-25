@@ -1,7 +1,7 @@
 import { prisma } from './db.js';
 import { getSettings, setSetting } from './settings.js';
-import { cardHasBingo, generateCard, shuffleDeck, winningLineFor, winningPatternCells } from './bingo.js';
-import { emptyMarks, markCard, markCalledNumbers, markedSet, unmarkCard } from './marking.js';
+import { cardsHaveBingo, generateCard, shuffleDeck, winningLineFor, winningPatternCells } from './bingo.js';
+import { emptyMarks, markCard, markCalledNumbers, unmarkCard } from './marking.js';
 import { broadcast, broadcastState, emitToUser } from './realtime.js';
 import { AppError } from './util.js';
 import {
@@ -16,7 +16,7 @@ import {
   settleRound,
   totalRealStakes,
 } from './payouts.js';
-import { botSeatTarget, isBotAuto, randomBotName } from './bots.js';
+import { botJoinDelays, botSeatTarget, isBotAuto, randomBotName } from './bots.js';
 import { chooseForcedNumber } from './forced-draw.js';
 import { splitBonusRefund, splitBonusStake } from './registration-bonus.js';
 
@@ -125,6 +125,73 @@ function cardForSlot(round, slot) {
   return generateCard((round.seed + slot * 7919) >>> 0);
 }
 
+async function seatPlannedBot(round, plan) {
+  if (!plan || plan.seated) return null;
+  const freeSlots = [];
+  for (let slot = 1; slot <= MAX_CARDS; slot += 1) {
+    if (!round.taken.has(slot)) freeSlots.push(slot);
+  }
+  if (!freeSlots.length) return null;
+
+  const slot = freeSlots[Math.floor(Math.random() * freeSlots.length)];
+  const cards = [cardForSlot(round, slot)];
+  const row = await prisma.gamePlayer.create({
+    data: {
+      gameId: round.id,
+      isBot: true,
+      botName: plan.name,
+      cards: JSON.stringify(cards),
+      paidStake: 0,
+    },
+  });
+
+  plan.seated = true;
+  round.taken.set(slot, row.id);
+  const player = {
+    id: row.id,
+    userId: null,
+    isBot: true,
+    name: plan.name,
+    phone: randomPhone(),
+    phone4: randomPhone4(),
+    cards,
+    slots: [slot],
+    marks: emptyMarks(cards),
+    autoMark: true,
+    paidStake: 0,
+    claimAt: 0,
+    claimed: false,
+    forced: plan.forced,
+  };
+  round.players.push(player);
+  return player;
+}
+
+async function seatPendingBots(round, now = Date.now(), all = false) {
+  if (!round?.botPlan?.length) return 0;
+  let seated = 0;
+  for (const plan of round.botPlan) {
+    if (plan.seated || (!all && plan.joinAt > now)) continue;
+    try {
+      const bot = await seatPlannedBot(round, plan);
+      if (bot) seated += 1;
+    } catch (err) {
+      console.error('[engine] bot seat failed:', err.message);
+    }
+  }
+  if (seated) {
+    round.prizePool = prizePoolFor(round);
+    await prisma.game
+      .update({ where: { id: round.id }, data: { prizePool: round.prizePool } })
+      .catch((err) => console.error('[engine] bot pot update failed:', err.message));
+  }
+  return seated;
+}
+
+async function seatAllPlannedBots(round) {
+  return seatPendingBots(round, Number.MAX_SAFE_INTEGER, true);
+}
+
 function prizePoolFor(round) {
   return computePayout({
     stakes: projectedPrizeStakes({
@@ -139,7 +206,7 @@ function prizePoolFor(round) {
 }
 
 function playerHasBingo(player) {
-  return cardHasBingo(player.cards, markedSet(ensureMarks(player)));
+  return cardsHaveBingo(player.cards, ensureMarks(player));
 }
 
 function forcedPlayerFor(round) {
@@ -151,6 +218,15 @@ function forcedPlayerFor(round) {
         : player.isBot && player.forced,
     ) || null
   );
+}
+
+/**
+ * A forced win should still look like a round of bingo. Plan it for a normal
+ * number of calls instead of steering every early draw toward the same card.
+ */
+function plannedForcedWin(calledCount = 0) {
+  const base = 28 + Math.floor(Math.random() * 9);
+  return Math.min(70, Math.max(base, Number(calledCount || 0) + 12));
 }
 
 export function getPublicState() {
@@ -321,6 +397,8 @@ async function createRound() {
     const forced = await resolveNextWinner();
     const botAuto = isBotAuto(settings);
     const botCount = Math.max(botSeatTarget(settings), forced?.type === 'bot' ? 1 : 0);
+    const waitMs = Math.max(5, Number(settings.waitSeconds)) * 1000;
+    const roundStartedAt = Date.now();
 
     const game = await prisma.game.create({
       data: {
@@ -341,13 +419,13 @@ async function createRound() {
       botFloor: botAuto && botCount > 2 ? Math.max(1, Math.round(botCount * 0.15)) : 0,
       removedBotIds: [],
       seed: game.id * 2654435761,
-      bots: [],
+      botPlan: [],
       players: [],
       called: new Set(),
       lastCalled: null,
       deck: shuffleDeck(),
       taken: new Map(),
-      waitEndsAt: Date.now() + Math.max(5, Number(settings.waitSeconds)) * 1000,
+      waitEndsAt: roundStartedAt + waitMs,
       nextCallAt: 0,
       nextRoundAt: 0,
       prizePool: 0,
@@ -356,47 +434,27 @@ async function createRound() {
       winnerIds: [],
       payouts: {},
       forcedWinner: forced,
+      forcedWinAt: forced ? plannedForcedWin() : 0,
+      humanBingoAt: 0,
     };
 
     const used = new Set();
-    const freeSlots = Array.from({ length: MAX_CARDS }, (_, i) => i + 1);
+    const joinDelays = botJoinDelays(botCount, waitMs);
     for (let i = 0; i < botCount; i += 1) {
       const isForcedBot = forced?.type === 'bot' && i === 0;
       const name = randomBotName(used);
       if (isForcedBot) forced.name = name;
-      // Bots occupy random card numbers too, so a number stays unique per round.
-      const slot = freeSlots.splice(Math.floor(Math.random() * freeSlots.length), 1)[0] || i + 1;
-      const cards = [cardForSlot(round, slot)];
-      const row = await prisma.gamePlayer.create({
-        data: {
-          gameId: game.id,
-          isBot: true,
-          botName: name,
-          cards: JSON.stringify(cards),
-          paidStake: 0,
-        },
-      });
-      round.taken.set(slot, row.id);
-      round.players.push({
-        id: row.id,
-        userId: null,
-        isBot: true,
+      round.botPlan.push({
         name,
-        phone: randomPhone(),
-        phone4: randomPhone4(),
-        cards,
-        slots: [slot],
-        marks: emptyMarks(cards),
-        autoMark: true,
-        paidStake: 0,
-        claimAt: 0,
-        claimed: false,
         forced: isForcedBot,
+        joinAt: roundStartedAt + (joinDelays[i] || 0),
+        seated: false,
       });
     }
+    round.botPlan.sort((a, b) => a.joinAt - b.joinAt);
 
-    // Bots are seats too, so the pot is known before the first real player
-    // picks. Keep the in-memory and stored values in sync for live clients.
+    // Bots buy their cards during the selection window. The pot grows as each
+    // one joins, just like real players picking card numbers.
     round.prizePool = prizePoolFor(round);
     state.current = round;
     await prisma.game.update({
@@ -429,6 +487,8 @@ export async function applyWinnerToCurrentRound(override) {
 
   for (const player of round.players) player.forced = false;
   round.forcedWinner = null;
+  round.forcedWinAt = 0;
+  round.humanBingoAt = 0;
 
   if (override.type === 'user') {
     if (round.status === 'CALLING' && !round.players.some((p) => p.userId === override.userId)) {
@@ -436,7 +496,11 @@ export async function applyWinnerToCurrentRound(override) {
     }
     round.forcedWinner = { ...override };
   } else if (override.type === 'bot') {
-    const bot = round.players.find((p) => p.isBot && !p.forced) || round.players.find((p) => p.isBot);
+    let bot = round.players.find((p) => p.isBot && !p.forced) || round.players.find((p) => p.isBot);
+    if (!bot) {
+      const plan = round.botPlan?.find((entry) => !entry.seated);
+      if (plan) bot = await seatPlannedBot(round, plan);
+    }
     if (!bot) return null;
     bot.forced = true;
     // Keep the bot's existing Ethiopian name; admin-supplied names are ignored.
@@ -445,6 +509,8 @@ export async function applyWinnerToCurrentRound(override) {
     return null;
   }
 
+  round.forcedWinAt = plannedForcedWin(round.called?.size || 0);
+  round.humanBingoAt = 0;
   await setSetting('nextWinner', 'none');
   await prisma.game
     .update({
@@ -465,6 +531,8 @@ export async function clearWinnerOverride() {
   const round = state.current;
   if (!round || round.status === 'ENDED') return;
   round.forcedWinner = null;
+  round.forcedWinAt = 0;
+  round.humanBingoAt = 0;
   for (const player of round.players) player.forced = false;
   await prisma.game
     .update({ where: { id: round.id }, data: { forcedWinnerType: null, forcedWinnerId: null } })
@@ -478,6 +546,9 @@ async function startCalling() {
   // Lock the table first so no more card changes can race the kickoff.
   round.status = 'CALLING';
   round.nextCallAt = Date.now();
+  // Anyone who has not bought yet gets their card before the first call so a
+  // manually started round still has the configured table.
+  await seatAllPlannedBots(round);
   await pruneBotsForRealCards(round).catch((err) =>
     console.error('[engine] bot cleanup failed:', err.message),
   );
@@ -513,6 +584,8 @@ async function callNextNumber() {
     called: round.called,
     players: round.players,
     forcedPlayer: forcedPlayerFor(round),
+    targetCalled: round.forcedWinAt,
+    warmupCalls: Math.max(0, Number(round.forcedWinAt || 0) - 12),
   });
   if (number != null) {
     const index = round.deck.indexOf(number);
@@ -542,17 +615,31 @@ function scheduleBotClaims() {
     if (inRound) return; // hold bots for the forced human winner
     // The forced player never joined: let the round play out normally.
     round.forcedWinner = null;
+    round.forcedWinAt = 0;
   }
+
   const now = Date.now();
+  const humanBingo = round.players.some((p) => !p.isBot && playerHasBingo(p));
+  if (humanBingo) {
+    if (!round.humanBingoAt) round.humanBingoAt = now;
+    // A real player who has already completed bingo gets the first chance to
+    // press the button. Without this, a bot whose claim timer happened to be
+    // due could end the round in the same tick and the button would do nothing.
+    if (now - round.humanBingoAt < 6000) return;
+  } else {
+    round.humanBingoAt = 0;
+  }
+
   for (const player of round.players) {
     if (!player.isBot || player.claimed) continue;
     if (!playerHasBingo(player, round)) continue;
-    const quick = round.forcedWinner?.type === 'bot' && player.forced;
     if (!player.claimAt) {
-      player.claimAt = now + (quick ? 700 : 1500 + Math.random() * 2500);
+      player.claimAt = now + 2800 + Math.random() * 2800;
     } else if (now >= player.claimAt) {
       player.claimed = true;
-      finishRound(player, 'bot');
+      finishRound(player, 'bot').catch((err) =>
+        console.error('[engine] bot settlement failed:', err.message),
+      );
       return;
     }
   }
@@ -561,6 +648,15 @@ function scheduleBotClaims() {
 async function finishRound(triggerPlayer, reason) {
   const round = state.current;
   if (!round || round.status !== 'CALLING') return;
+  const previous = {
+    status: round.status,
+    winners: round.winners,
+    winnerIds: round.winnerIds,
+    payouts: round.payouts,
+    prizePool: round.prizePool,
+    offeredPrizePool: round.offeredPrizePool,
+    nextRoundAt: round.nextRoundAt,
+  };
   round.status = 'ENDED';
   const settings = getSettings();
 
@@ -624,52 +720,72 @@ async function finishRound(triggerPlayer, reason) {
   round.prizePool = pool;
   round.nextRoundAt = Date.now() + Math.max(2000, Number(settings.roundEndDelayMs));
 
-  await prisma.$transaction(async (tx) => {
-    await tx.game.update({
-      where: { id: round.id },
-      data: {
-        status: 'ENDED',
-        endedAt: new Date(),
-        prizePool: pool,
-        platformFee,
-        winnerId: realWinners[0]?.userId || null,
-      },
-    });
-
-    for (const player of round.players) {
-      const isWinner = realWinners.includes(player);
-      const payout = isWinner ? winnerPayouts.get(player.id) || 0 : 0;
-      await tx.gamePlayer.update({
-        where: { id: player.id },
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.game.update({
+        where: { id: round.id },
         data: {
-          hasBingo: playerHasBingo(player, round),
-          isWinner,
-          winAmount: payout,
+          status: 'ENDED',
+          endedAt: new Date(),
+          prizePool: pool,
+          platformFee,
+          winnerId: realWinners[0]?.userId || null,
         },
       });
-      if (isWinner && player.userId && payout > 0) {
-        await tx.user.update({ where: { id: player.userId }, data: { balance: { increment: payout } } });
-        await tx.transaction.create({
+
+      for (const player of round.players) {
+        const isWinner = realWinners.includes(player);
+        const payout = isWinner ? winnerPayouts.get(player.id) || 0 : 0;
+        await tx.gamePlayer.update({
+          where: { id: player.id },
           data: {
-            userId: player.userId,
-            type: 'win',
-            amount: payout,
-            status: 'completed',
-            reference: `game:${round.id}`,
+            hasBingo: playerHasBingo(player, round),
+            isWinner,
+            winAmount: payout,
+          },
+        });
+        if (isWinner && player.userId && payout > 0) {
+          await tx.user.update({ where: { id: player.userId }, data: { balance: { increment: payout } } });
+          await tx.transaction.create({
+            data: {
+              userId: player.userId,
+              type: 'win',
+              amount: payout,
+              status: 'completed',
+              reference: `game:${round.id}`,
+            },
+          });
+        }
+      }
+
+      if (round.forcedWinner) {
+        await tx.adminAction.create({
+          data: {
+            actionType: 'winner_override_used',
+            details: `game:${round.id} forced:${round.forcedWinner.type}:${round.forcedWinner.userId || round.forcedWinner.name}`,
           },
         });
       }
+    });
+  } catch (err) {
+    // Never leave the live round stranded in ENDED with no result after a
+    // failed settlement. The caller can retry and the next tick continues.
+    round.status = previous.status;
+    round.winners = previous.winners;
+    round.winnerIds = previous.winnerIds;
+    round.payouts = previous.payouts;
+    round.prizePool = previous.prizePool;
+    round.offeredPrizePool = previous.offeredPrizePool;
+    round.nextRoundAt = previous.nextRoundAt;
+    for (const player of round.players) {
+      if (player.isBot) {
+        player.claimed = false;
+        player.claimAt = 0;
+      }
     }
-
-    if (round.forcedWinner) {
-      await tx.adminAction.create({
-        data: {
-          actionType: 'winner_override_used',
-          details: `game:${round.id} forced:${round.forcedWinner.type}:${round.forcedWinner.userId || round.forcedWinner.name}`,
-        },
-      });
-    }
-  });
+    console.error('[engine] settlement failed:', err.message);
+    throw err;
+  }
 
   for (const p of realWinners) {
     if (!p.userId) continue;
@@ -705,6 +821,7 @@ async function tick() {
     }
     const now = Date.now();
     if (round.status === 'WAITING') {
+      await seatPendingBots(round, now);
       const auto = Number(getSettings().autoStart) !== 0;
       if (auto && now >= round.waitEndsAt) {
         await startCalling();
@@ -1059,7 +1176,7 @@ export async function claimBingo(user) {
   }
 
   await finishRound(player, 'claim');
-  return { ok: true, winners: round.winners };
+  return { ok: true, winners: round.winners, state: getStateForUser(user.id) };
 }
 
 /**

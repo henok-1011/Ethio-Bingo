@@ -129,13 +129,16 @@ npm start          # http://localhost:4000
   split the **whole advertised pot** (remainder santim go to the first winners). A bot may trigger
   the end of the round, but **bots never receive real money**; if only bots win, no real payout is
   made.
-- Bots join each round per admin setting with random names and cards. Auto mode varies the
-  baseline and never exceeds 50 bots; manual mode uses the exact count entered with no 50-bot cap
-  and keeps that count for the round. They claim with a 1.5–4 s human-like delay. With a forced
+- Bots join each round per admin setting with random male Ethiopian names and cards. Their card purchases are
+  spread across the waiting window, so the table fills gradually instead of every bot appearing
+  the instant the picker opens. Auto mode varies the baseline and never exceeds 50 bots; manual
+  mode uses the exact count entered with no 50-bot cap and keeps that count for the round. They
+  claim with a 3–6 s human-like delay and hold while a
+  real player already has bingo, giving that player a few seconds to claim first. With a forced
   human winner, bots are held until that player claims (or the deck runs out), and the draw is
-  biased toward that player's card while avoiding numbers that would give another real player a
-  second completed pattern when possible. The final override still decides the winner if the
-  round ends first.
+  paced to a normal-length round (roughly 28–36 calls) before steering toward that player's card,
+  while avoiding numbers that would give another real player a second completed pattern when
+  possible. The final override still decides the winner if the round ends first.
 - Card numbers are **1–432**. A player picks specific numbers during the 30-second waiting window
   and each pick costs 20 ETB (the configured stake), charged immediately and atomically. A number
   can only be bought once per round by anyone, and a player may buy as many numbers as they can

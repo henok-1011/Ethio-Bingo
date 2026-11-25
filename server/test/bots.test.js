@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AUTO_BOT_LIMIT, botSeatTarget, isBotAuto, randomBotName } from '../src/bots.js';
+import { AUTO_BOT_LIMIT, botJoinDelays, botSeatTarget, isBotAuto, randomBotName } from '../src/bots.js';
 
 test('auto mode varies the baseline over a wider range without exceeding 50', () => {
   assert.equal(isBotAuto({}), true);
@@ -25,7 +25,26 @@ test('invalid stored bot counts do not produce unsafe loops', () => {
   assert.equal(botSeatTarget({ botCount: 'not-a-number' }), 0);
 });
 
-test('bot names are unique Ethiopian full names with no numbered fallback', () => {
+test('bots buy cards across the waiting window instead of all at once', () => {
+  const delays = botJoinDelays(8, 30_000, () => 0.5);
+  assert.equal(delays.length, 8);
+  assert.ok(delays.every((delay) => delay > 0 && delay < 30_000));
+  assert.ok(delays[7] - delays[0] > 15_000);
+  assert.ok(new Set(delays).size > 1);
+});
+
+test('bot join timing stays inside short and long buying windows', () => {
+  const short = botJoinDelays(5, 5_000, () => 0);
+  const long = botJoinDelays(50, 30_000, () => 0.999);
+  assert.ok(short.every((delay) => delay >= 0 && delay < 5_000));
+  assert.ok(short[4] > short[0]);
+  assert.ok(long.every((delay) => delay >= 0 && delay < 30_000));
+  assert.ok(long[49] > long[0]);
+  assert.deepEqual(botJoinDelays(0, 30_000), []);
+  assert.deepEqual(botJoinDelays(3, 0), []);
+});
+
+test('bot names are unique male Ethiopian full names with no numbered fallback', () => {
   const used = new Set();
   for (let index = 0; index < 432; index += 1) {
     const name = randomBotName(used, () => 0.5);

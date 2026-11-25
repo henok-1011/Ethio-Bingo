@@ -81,10 +81,7 @@ function advanceScore(cards, called, candidate) {
  * a manual player can still tap a called number later, so treating an
  * unmarked number as safe would only postpone the conflict.
  */
-function opponentCompletions(players, forcedPlayer, called, candidate) {
-  const projected = new Set(called);
-  projected.add(candidate);
-
+function opponentCompletions(players, forcedPlayer, called, projected) {
   let count = 0;
   for (const player of players || []) {
     if (!player || player.isBot || player.id === forcedPlayer.id) continue;
@@ -94,43 +91,99 @@ function opponentCompletions(players, forcedPlayer, called, candidate) {
   return count;
 }
 
+function rankTowardWin(a, b) {
+  return (
+    a.opponentWins - b.opponentWins ||
+    b.patterns - a.patterns ||
+    b.near - a.near ||
+    b.progress - a.progress ||
+    a.index - b.index
+  );
+}
+
+function rankNormalDraw(a, b) {
+  return a.opponentWins - b.opponentWins || a.index - b.index;
+}
+
 /**
  * Chooses the next number when a forced winner is active.
  *
- * Candidates are limited to numbers printed on the forced player's card.
- * Candidates that would give another real player a second pattern are
- * rejected when a safe alternative exists; if every candidate is unsafe, the
- * one completing the fewest real opponents is used. Ties prefer the number
- * that advances the forced player furthest toward a second pattern.
+ * Without a plan (`targetCalled` 0) it keeps the original behaviour: only
+ * numbers printed on the forced player's card are considered. The engine now
+ * supplies a plan so the win is built over a normal-length round instead of
+ * completing in the first few calls:
  *
- * Returns null when there is no forced player or no suitable card number,
- * allowing the caller to fall back to the normal shuffled deck.
+ * - warm-up: draw normally, but never finish the forced player early;
+ * - build: prefer forced-card numbers while still holding the win back;
+ * - finish: complete the forced player while avoiding another real winner.
+ *
+ * Returns null when there is no forced player or no suitable number, allowing
+ * the caller to fall back to the normal shuffled deck.
  */
-export function chooseForcedNumber({ deck, called, players, forcedPlayer }) {
+export function chooseForcedNumber({
+  deck,
+  called,
+  players,
+  forcedPlayer,
+  targetCalled = 0,
+  warmupCalls = 0,
+}) {
   if (!forcedPlayer || !Array.isArray(deck) || deck.length === 0) return null;
 
   const calledSet = called instanceof Set ? called : new Set(called || []);
-  const candidates = [];
+  const target = Math.max(0, Math.floor(Number(targetCalled) || 0));
+  const warmup = Math.max(0, Math.floor(Number(warmupCalls) || 0));
+  const drawNumber = calledSet.size;
 
+  let phase = 'legacy';
+  if (target > 0) {
+    if (drawNumber < warmup) phase = 'warmup';
+    else if (drawNumber + 1 < target) phase = 'build';
+    else phase = 'finish';
+  }
+
+  const candidates = [];
   deck.forEach((number, index) => {
     if (calledSet.has(number)) return;
-    if (!(forcedPlayer.cards || []).some((card) => cardHasNumber(card, number))) return;
 
-    const opponentWins = opponentCompletions(players, forcedPlayer, calledSet, number);
+    const projected = new Set(calledSet);
+    projected.add(number);
+    const onForcedCard = (forcedPlayer.cards || []).some((card) =>
+      cardHasNumber(card, number),
+    );
     const score = advanceScore(forcedPlayer.cards, calledSet, number);
-    candidates.push({ number, index, opponentWins, ...score });
+    candidates.push({
+      number,
+      index,
+      onForcedCard,
+      forcedBingo: cardHasBingo(forcedPlayer.cards, projected),
+      opponentWins: opponentCompletions(players, forcedPlayer, calledSet, projected),
+      ...score,
+    });
   });
 
   if (!candidates.length) return null;
 
-  candidates.sort(
-    (a, b) =>
-      a.opponentWins - b.opponentWins ||
-      b.patterns - a.patterns ||
-      b.near - a.near ||
-      b.progress - a.progress ||
-      a.index - b.index,
-  );
+  let pool = [];
+  if (phase === 'legacy') {
+    pool = candidates.filter((candidate) => candidate.onForcedCard);
+  } else if (phase === 'warmup') {
+    pool = candidates.filter((candidate) => !candidate.forcedBingo);
+  } else if (phase === 'build') {
+    pool = candidates.filter((candidate) => candidate.onForcedCard && !candidate.forcedBingo);
+    if (!pool.length) pool = candidates.filter((candidate) => !candidate.forcedBingo);
+  } else {
+    pool = candidates.filter((candidate) => candidate.onForcedCard && candidate.forcedBingo);
+    if (!pool.length) pool = candidates.filter((candidate) => candidate.onForcedCard);
+    if (!pool.length) pool = candidates.filter((candidate) => candidate.forcedBingo);
+  }
 
-  return candidates[0].number;
+  if (!pool.length) {
+    if (phase === 'legacy') return null;
+    pool = candidates.filter((candidate) => !candidate.forcedBingo);
+    if (!pool.length) pool = candidates;
+  }
+
+  pool.sort(phase === 'warmup' ? rankNormalDraw : rankTowardWin);
+  return pool[0].number;
 }

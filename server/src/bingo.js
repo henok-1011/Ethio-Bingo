@@ -151,6 +151,16 @@ export function cardHasBingo(cards, calledSet) {
   return (cards || []).some((card) => hasWinningPatterns(card, calledSet));
 }
 
+/**
+ * Each card must win on its own marks. Passing one combined set would let
+ * numbers marked on different cards complete a pattern that no card owns.
+ */
+export function cardsHaveBingo(cards, markedSets = []) {
+  return (cards || []).some((card, index) =>
+    hasWinningPatterns(card, markedSets[index] || new Set()),
+  );
+}
+
 export function shuffleDeck() {
   const deck = Array.from({ length: 75 }, (_, i) => i + 1);
   for (let i = deck.length - 1; i > 0; i -= 1) {

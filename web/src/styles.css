@@ -3766,9 +3766,9 @@ td strong {
   font-size: 13px;
 }
 .jo-game .bingo-cell.marked {
-  background: #e74c3c;
+  background: #ff1744;
   color: #fff;
-  box-shadow: none;
+  box-shadow: 0 0 8px rgba(255, 23, 68, 0.35);
 }
 .jo-game .bingo-cell.selected {
   background: #f1c40f;
@@ -3887,6 +3887,13 @@ td strong {
 }
 .jo-live.has-cards .bingo-card-foot .card-win {
   font-size: 7px;
+}
+.jo-live.has-cards .jo-claim-under {
+  margin-top: 8px;
+  padding: 11px 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.25;
 }
 .jo-refresh-under {
   width: 100%;
@@ -4269,6 +4276,11 @@ td strong {
   font-weight: 800;
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
   cursor: pointer;
+}
+/* Keep selected cards bright while the save request is in flight. */
+.jo-select-grid .pick-cell.mine:disabled,
+.card-picker .pick-cell.mine:disabled {
+  opacity: 1;
 }
 .jo-select-grid .pick-cell.taken {
   background: #62252c;

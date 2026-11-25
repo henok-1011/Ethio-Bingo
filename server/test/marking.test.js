@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cardHasBingo, completedPatterns } from '../src/bingo.js';
+import { cardHasBingo, cardsHaveBingo, completedPatterns } from '../src/bingo.js';
 import {
   cardHasNumber,
   emptyMarks,
@@ -76,6 +76,24 @@ test('a manual mark can be removed with a second tap', () => {
   // Only a number on the card can be unmarked.
   assert.equal(unmarkCard(cards, marks, 0, 6), false);
   assert.equal(unmarkCard(cards, marks, 1, 1), false);
+});
+
+test('player bingo is checked card by card, not by mixing marks', () => {
+  const cards = [CARD_A, CARD_A];
+  const marks = [
+    new Set([1, 16, 31, 46, 5, 65]),
+    new Set([1, 16, 31, 46, 61]),
+  ];
+  const union = markedSet(marks);
+
+  // Neither card has two patterns, but combining both cards' marks does.
+  assert.deepEqual(completedPatterns(CARD_A, union).sort(), ['fourCorners', 'horizontal']);
+  assert.equal(cardHasBingo(cards, union), true);
+  assert.equal(cardsHaveBingo(cards, marks), false);
+
+  // One card completing both patterns is a real win.
+  marks[0].add(61);
+  assert.equal(cardsHaveBingo(cards, marks), true);
 });
 
 test('two marked patterns win even when the called list is not passed in', () => {

@@ -30,6 +30,7 @@ export default function PlayerApp() {
   const voiceOnRef = useRef(null);
   const authStarted = useRef(false);
   const phoneAsked = useRef(false);
+  const claimNoticeAt = useRef(0);
 
   youRef.current = you;
   gameRef.current = game;
@@ -160,7 +161,11 @@ export default function PlayerApp() {
       const mine = youRef.current?.playerId;
       if (mine && payload.winnerIds?.includes(mine)) {
         haptic('success');
-        toast('🎉 ቢንጎ! በዚህ ዙር አሸንፈዋል!');
+        // A direct claim already shows this message from its response. This
+        // fallback covers wins delivered only by the socket.
+        if (Date.now() - claimNoticeAt.current > 8000) {
+          toast('🎉 ቢንጎ! በዚህ ዙር አሸንፈዋል!', 'success');
+        }
       } else {
         toast('ዙሩ አልቋል። ቀጣዩ ዙር እየተጀመረ ነው…');
       }
@@ -300,11 +305,19 @@ export default function PlayerApp() {
   }
 
   async function claim() {
+    if (busy) return;
+    claimNoticeAt.current = Date.now();
     setBusy(true);
     try {
-      await api('/api/game/claim', { token, method: 'POST' });
+      const result = await api('/api/game/claim', { token, method: 'POST' });
+      if (result?.state) {
+        setGame(result.state);
+        setYou(result.state.you || null);
+      }
       haptic('success');
+      toast('🎉 ቢንጎ! በዚህ ዙር አሸንፈዋል!', 'success');
     } catch (err) {
+      claimNoticeAt.current = 0;
       toast(err.message, 'error');
       haptic('error');
     } finally {
