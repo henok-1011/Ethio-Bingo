@@ -129,7 +129,8 @@ npm start          # http://localhost:4000
   split the **whole advertised pot** (remainder santim go to the first winners). A bot may trigger
   the end of the round, but **bots never receive real money**; if only bots win, no real payout is
   made.
-- Bots join each round per admin setting with random male Ethiopian names and cards. Their card purchases are
+- Bots join each round per admin setting with random male Ethiopian first names (some with a chat emoji)
+  and cards. Their card purchases are
   spread across the waiting window, so the table fills gradually instead of every bot appearing
   the instant the picker opens. Auto mode varies the baseline and never exceeds 50 bots; manual
   mode uses the exact count entered with no 50-bot cap and keeps that count for the round. They

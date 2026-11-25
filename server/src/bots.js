@@ -42,8 +42,8 @@ export function botJoinDelays(count, windowMs, random = Math.random) {
   });
 }
 
-// Real male Ethiopian first names, paired with family names so the bots have a
-// large enough pool to avoid synthetic labels like "Player1234".
+// Real male Ethiopian first names. Bots use a first name only, with a chat
+// emoji on some of them, so they look like ordinary player display names.
 const BOT_FIRST_NAMES = [
   'Abebe', 'Abel', 'Abrham', 'Addisu', 'Alemayehu', 'Amanuel', 'Amare', 'Ayele',
   'Bekele', 'Bereket', 'Binyam', 'Biruk', 'Chala', 'Dagmawi', 'Daniel', 'Dawit',
@@ -54,26 +54,33 @@ const BOT_FIRST_NAMES = [
   'Tesfaye', 'Tewodros', 'Tomas', 'Worku', 'Yared', 'Yohannes', 'Yonas', 'Zewdu',
 ];
 
-const BOT_LAST_NAMES = [
-  'Bekele', 'Tesfaye', 'Kebede', 'Girma', 'Haile', 'Alemu', 'Tadesse', 'Wolde',
-  'Demissie', 'Mekonnen', 'Assefa', 'Desta', 'Gebre', 'Mariam', 'Negash', 'Abebe',
-  'Ayele', 'Fikru', 'Lemma', 'Teshome', 'Worku', 'Yohannes', 'Zerihun', 'Berhanu',
-  'Getachew', 'Hailu', 'Mengistu', 'Mulugeta', 'Wondimu', 'Zewde',
-];
-
-const BOT_NAMES = BOT_FIRST_NAMES.flatMap((first) =>
-  BOT_LAST_NAMES.map((last) => `${first} ${last}`),
-);
+const BOT_EMOJIS = ['🔥', '⚡', '🎯', '⭐', '💎', '👑', '🎲', '🚀', '🏆', '🦁', '🌟', '💫', '🍀', '🎉', '😎'];
 
 /**
- * Picks an unused Ethiopian full name. If a table ever exceeds the name pool,
- * it reuses a real name instead of falling back to a numbered player label.
+ * Picks an unused male Ethiopian first name. About a third of bots get an emoji
+ * suffix, mimicking the display names many real players use in chat apps. If a
+ * table ever exceeds the name pool, it reuses a first name instead of falling
+ * back to a numbered player label.
  */
 export function randomBotName(used = new Set(), random = Math.random) {
-  const available = BOT_NAMES.filter((name) => !used.has(name));
-  const pool = available.length ? available : BOT_NAMES;
+  const available = BOT_FIRST_NAMES.filter((first) => {
+    if (used.has(first)) return false;
+    for (const name of used) {
+      if (String(name).startsWith(`${first} `)) return false;
+    }
+    return true;
+  });
+  const pool = available.length ? available : BOT_FIRST_NAMES;
   const index = Math.min(pool.length - 1, Math.max(0, Math.floor(random() * pool.length)));
-  const name = pool[index];
+  const first = pool[index];
+  let name = first;
+  if (random() >= 0.62) {
+    const emojiIndex = Math.min(
+      BOT_EMOJIS.length - 1,
+      Math.max(0, Math.floor(random() * BOT_EMOJIS.length)),
+    );
+    name = `${first} ${BOT_EMOJIS[emojiIndex]}`;
+  }
   used.add(name);
   return name;
 }

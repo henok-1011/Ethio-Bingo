@@ -44,12 +44,17 @@ test('bot join timing stays inside short and long buying windows', () => {
   assert.deepEqual(botJoinDelays(3, 0), []);
 });
 
-test('bot names are unique male Ethiopian full names with no numbered fallback', () => {
+test('bot names are unique male first names with no family names or numbers', () => {
   const used = new Set();
-  for (let index = 0; index < 432; index += 1) {
+  for (let index = 0; index < 50; index += 1) {
     const name = randomBotName(used, () => 0.5);
-    assert.match(name, /^[A-Z][a-z]+(?: [A-Z][a-z]+)+$/);
+    assert.match(name, /^[A-Z][a-z]+$/);
     assert.doesNotMatch(name, /Player|\d|Lucky/i);
   }
-  assert.equal(used.size, 432);
+  assert.equal(used.size, 50);
+});
+
+test('some bot first names carry a chat emoji', () => {
+  const name = randomBotName(new Set(), () => 0.9);
+  assert.match(name, /^[A-Z][a-z]+ [^A-Za-z0-9\s]+$/u);
 });

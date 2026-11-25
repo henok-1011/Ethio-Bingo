@@ -20,7 +20,10 @@ function joColumnClass(number) {
 }
 
 function firstName(value) {
-  return String(value || 'Player').trim().split(/\s+/)[0] || 'Player';
+  const parts = String(value || 'Player').trim().split(/\s+/);
+  const first = parts[0] || 'Player';
+  // Bot names can end with an emoji; keep it when shortening a display name.
+  return parts[1] && !/^[A-Za-z]/.test(parts[1]) ? `${first} ${parts[1]}` : first;
 }
 
 function maskedPhone(winner) {
