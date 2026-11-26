@@ -228,3 +228,50 @@ test('the warm-up can draw a number outside the forced card', () => {
 
   assert.equal(number, 6);
 });
+
+test('a planned forced win lands on the target call with exactly two patterns and a natural draw', async () => {
+  const { generateCard, shuffleDeck, completedPatterns } = await import('../src/bingo.js');
+  const { cardHasNumber } = await import('../src/marking.js');
+  let onTarget = 0;
+  let cardHeavyTail = 0;
+  const runs = 60;
+  for (let run = 0; run < runs; run += 1) {
+    const forced = { id: 1, isBot: false, cards: [generateCard()] };
+    const others = Array.from({ length: 6 }, (_, i) => ({ id: i + 2, isBot: false, cards: [generateCard()] }));
+    const players = [forced, ...others];
+    const deck = shuffleDeck();
+    const called = new Set();
+    const target = 28 + (run % 9);
+    let wonAt = 0;
+    while (deck.length && !wonAt) {
+      let number = chooseForcedNumber({ deck, called, players, forcedPlayer: forced, targetCalled: target });
+      if (number == null) number = deck[deck.length - 1];
+      deck.splice(deck.indexOf(number), 1);
+      called.add(number);
+      if (cardHasBingo(forced.cards, called)) wonAt = called.size;
+    }
+    assert.ok(wonAt > 0, 'forced player should eventually win');
+    assert.ok(wonAt >= target, `won early at ${wonAt} (target ${target})`);
+    assert.equal(completedPatterns(forced.cards[0], called).length, 2);
+    if (wonAt === target) onTarget += 1;
+    // The last 12 calls should not all be numbers from the forced card.
+    const tail = [...called].slice(-12);
+    if (tail.filter((n) => cardHasNumber(forced.cards[0], n)).length >= 10) cardHeavyTail += 1;
+  }
+  assert.ok(onTarget / runs > 0.8, `on target only ${onTarget}/${runs}`);
+  assert.equal(cardHeavyTail, 0);
+});
+
+test('after the forced player has bingo, calls avoid their card', async () => {
+  const forced = player(1, FORCED_CARD);
+  const called = new Set([1, 2, 3, 4, 5, 17, 49, 65]);
+  assert.equal(cardHasBingo(forced.cards, called), true);
+  const number = chooseForcedNumber({
+    deck: [16, 6],
+    called,
+    players: [forced],
+    forcedPlayer: forced,
+    targetCalled: 8,
+  });
+  assert.equal(number, 6);
+});

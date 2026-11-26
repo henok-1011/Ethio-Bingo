@@ -1,6 +1,6 @@
 import { prisma } from './db.js';
 import { getSettings, setSetting } from './settings.js';
-import { cardsHaveBingo, generateCard, shuffleDeck, winningCardFor } from './bingo.js';
+import { cardHasBingo, cardsHaveBingo, generateCard, shuffleDeck, winningCardFor } from './bingo.js';
 import { emptyMarks, markCard, markCalledNumbers, unmarkCard } from './marking.js';
 import { broadcast, broadcastState, emitToUser } from './realtime.js';
 import { AppError } from './util.js';
@@ -485,6 +485,7 @@ export async function applyWinnerToCurrentRound(override) {
   for (const player of round.players) player.forced = false;
   round.forcedWinner = null;
   round.forcedWinAt = 0;
+  round.forcedBingoAt = 0;
   round.humanBingoAt = 0;
 
   if (override.type === 'user') {
@@ -529,6 +530,7 @@ export async function clearWinnerOverride() {
   if (!round || round.status === 'ENDED') return;
   round.forcedWinner = null;
   round.forcedWinAt = 0;
+  round.forcedBingoAt = 0;
   round.humanBingoAt = 0;
   for (const player of round.players) player.forced = false;
   await prisma.game
@@ -574,15 +576,14 @@ async function callNextNumber() {
   const round = state.current;
   if (!round || round.status !== 'CALLING') return;
 
-  // A forced winner gets a deck biased toward their card. Bots are not
-  // treated as blockers here because scheduleBotClaims holds them back.
+  // A forced winner gets a planned two-pattern win on a normal-looking draw.
+  // Bots are not treated as blockers because scheduleBotClaims holds them back.
   let number = chooseForcedNumber({
     deck: round.deck,
     called: round.called,
     players: round.players,
     forcedPlayer: forcedPlayerFor(round),
     targetCalled: round.forcedWinAt,
-    warmupCalls: Math.max(0, Number(round.forcedWinAt || 0) - 12),
   });
   if (number != null) {
     const index = round.deck.indexOf(number);
@@ -607,29 +608,49 @@ async function callNextNumber() {
 function scheduleBotClaims() {
   const round = state.current;
   if (!round || round.status !== 'CALLING') return;
+  const now = Date.now();
   if (round.forcedWinner?.type === 'user') {
-    const inRound = round.players.some((p) => p.userId === round.forcedWinner.userId);
-    if (inRound) return; // hold bots for the forced human winner
+    const forced = forcedPlayerFor(round);
+    if (forced) {
+      // Hold bots for the forced human winner. If they have bingo but do not
+      // press the button, claim for them after a short grace so the round
+      // does not keep calling numbers indefinitely.
+      if (cardHasBingo(forced.cards, round.called)) {
+        if (!round.forcedBingoAt) round.forcedBingoAt = now;
+        if (now - round.forcedBingoAt >= 10000) {
+          markCalledNumbers(forced.cards, ensureMarks(forced), round.called);
+          finishRound(forced, 'auto').catch((err) =>
+            console.error('[engine] forced settlement failed:', err.message),
+          );
+        }
+      }
+      return;
+    }
     // The forced player never joined: let the round play out normally.
     round.forcedWinner = null;
     round.forcedWinAt = 0;
   }
+  const forcedBot = round.forcedWinner?.type === 'bot' ? forcedPlayerFor(round) : null;
 
-  const now = Date.now();
-  const humanBingo = round.players.some((p) => !p.isBot && playerHasBingo(p));
+  // Judge real players on the called numbers, not their marks: an Auto
+  // Marking OFF player still has to tap the last number before pressing BINGO,
+  // and a bot must not win during those seconds.
+  const humanBingo = round.players.some((p) => !p.isBot && cardHasBingo(p.cards, round.called));
   if (humanBingo) {
     if (!round.humanBingoAt) round.humanBingoAt = now;
-    // A real player who has already completed bingo gets the first chance to
-    // press the button. Without this, a bot whose claim timer happened to be
-    // due could end the round in the same tick and the button would do nothing.
-    if (now - round.humanBingoAt < 6000) return;
+    // A real player who has completed bingo gets the first chance to press
+    // the button. Without this, a bot whose claim timer happened to be due
+    // could end the round in the same tick and the button would do nothing.
+    if (now - round.humanBingoAt < 8000) return;
   } else {
     round.humanBingoAt = 0;
   }
 
   for (const player of round.players) {
     if (!player.isBot || player.claimed) continue;
-    if (!playerHasBingo(player, round)) continue;
+    // In a forced-bot round only the chosen bot may claim.
+    if (forcedBot && player !== forcedBot) continue;
+    if (!playerHasBingo(player)) continue;
     if (!player.claimAt) {
       player.claimAt = now + 2800 + Math.random() * 2800;
     } else if (now >= player.claimAt) {
@@ -657,16 +678,16 @@ async function finishRound(triggerPlayer, reason) {
   round.status = 'ENDED';
   const settings = getSettings();
 
+  // Whoever ended the round with a valid claim wins it, alone. A forced
+  // winner override never takes the win from a player who claimed first.
+  // Only a round with no claimant (deck exhausted) falls back to the forced
+  // player or to everyone holding bingo.
   let winners = [];
-  if (round.forcedWinner) {
-    const forced = round.players.find((p) =>
-      round.forcedWinner.type === 'user' ? p.userId === round.forcedWinner.userId : p.isBot && p.forced,
-    );
-    if (forced) winners = [forced];
-  }
-  if (!winners.length) {
-    winners = round.players.filter((p) => playerHasBingo(p, round));
-    if (!winners.length && triggerPlayer) winners = [triggerPlayer];
+  if (triggerPlayer) {
+    winners = [triggerPlayer];
+  } else {
+    const forced = forcedPlayerFor(round);
+    winners = forced ? [forced] : round.players.filter((p) => playerHasBingo(p));
   }
 
   const realWinners = winners.filter((p) => !p.isBot);
@@ -730,18 +751,23 @@ async function finishRound(triggerPlayer, reason) {
         },
       });
 
-      for (const player of round.players) {
-        const isWinner = realWinners.includes(player);
-        const payout = isWinner ? winnerPayouts.get(player.id) || 0 : 0;
+      // A constant number of queries regardless of table size. One update per
+      // seat used to push big rounds past the transaction timeout, which rolled
+      // the claim back and let someone else win later.
+      const bingoIds = round.players.filter((p) => playerHasBingo(p)).map((p) => p.id);
+      if (bingoIds.length) {
+        await tx.gamePlayer.updateMany({
+          where: { id: { in: bingoIds } },
+          data: { hasBingo: true },
+        });
+      }
+      for (const player of realWinners) {
+        const payout = winnerPayouts.get(player.id) || 0;
         await tx.gamePlayer.update({
           where: { id: player.id },
-          data: {
-            hasBingo: playerHasBingo(player, round),
-            isWinner,
-            winAmount: payout,
-          },
+          data: { isWinner: true, winAmount: payout },
         });
-        if (isWinner && player.userId && payout > 0) {
+        if (player.userId && payout > 0) {
           await tx.user.update({ where: { id: player.userId }, data: { balance: { increment: payout } } });
           await tx.transaction.create({
             data: {
@@ -763,7 +789,7 @@ async function finishRound(triggerPlayer, reason) {
           },
         });
       }
-    });
+    }, { timeout: 20000, maxWait: 10000 });
   } catch (err) {
     // Never leave the live round stranded in ENDED with no result after a
     // failed settlement. The caller can retry and the next tick continues.
@@ -888,6 +914,7 @@ export async function joinRound(user, selection = []) {
 
   const total = round.stake * slots.length;
   let charged = null;
+  let committed = false;
   try {
     const fresh = await prisma.user.findUnique({ where: { id: user.id } });
     const split = splitBonusStake(total, fresh?.balance, fresh?.bonusBalance);
@@ -919,21 +946,21 @@ export async function joinRound(user, selection = []) {
     const previousCardCount = player ? (player.cards?.length || 0) : 0;
 
     if (player) {
-      player.cards = [...player.cards, ...generated];
+      const nextCards = [...player.cards, ...generated];
+      const nextPaid = player.paidStake + total;
+      const nextBonus = (player.bonusStake || 0) + split.bonusUsed;
+      // Persist first so a failed write never leaves unpaid cards in memory.
+      await prisma.gamePlayer.update({
+        where: { id: player.id },
+        data: { cards: JSON.stringify(nextCards), paidStake: nextPaid, bonusStake: nextBonus },
+      });
+      player.cards = nextCards;
       player.slots = [...(player.slots || []), ...slots];
       player.marks = [...ensureMarks(player), ...emptyMarks(generated)];
       player.autoMark = fresh.autoMark !== false;
       if (player.autoMark) markCalledNumbers(player.cards, player.marks, round.called);
-      player.paidStake += total;
-      player.bonusStake = (player.bonusStake || 0) + split.bonusUsed;
-      await prisma.gamePlayer.update({
-        where: { id: player.id },
-        data: {
-          cards: JSON.stringify(player.cards),
-          paidStake: player.paidStake,
-          bonusStake: player.bonusStake,
-        },
-      });
+      player.paidStake = nextPaid;
+      player.bonusStake = nextBonus;
     } else {
       const row = await prisma.gamePlayer.create({
         data: {
@@ -963,6 +990,9 @@ export async function joinRound(user, selection = []) {
       };
       round.players.push(player);
     }
+    // From here the cards are paid for and seated; a later bookkeeping failure
+    // must not refund the stake or free the card numbers.
+    committed = true;
 
     await prisma.transaction.create({
       data: {
@@ -1014,6 +1044,10 @@ export async function joinRound(user, selection = []) {
       you: getPlayerView(round, user.id),
     };
   } catch (err) {
+    if (committed) {
+      console.error('[engine] join bookkeeping failed after seating:', err.message);
+      throw err;
+    }
     for (const slot of slots) {
       if (round.taken.get(slot) === user.id) round.taken.delete(slot);
     }
@@ -1162,13 +1196,23 @@ export async function deselectCard(user, cardNumber) {
 
 export async function claimBingo(user) {
   const round = state.current;
-  if (!round || round.status !== 'CALLING') {
-    throw new AppError('ማመልከቻ የሚቻልበት ንቁ ዙር የለም።');
+  const player = round?.players.find((p) => p.userId === user.id);
+  if (round?.status === 'ENDED' && player && round.winnerIds?.includes(player.id)) {
+    return { ok: true, winners: round.winners, state: getStateForUser(user.id) };
   }
-  const player = round.players.find((p) => p.userId === user.id);
+  if (!round || round.status !== 'CALLING') {
+    throw new AppError(
+      round?.status === 'ENDED'
+        ? 'ሌላ ተጫዋች ቀድሞ ቢንጎ ብሏል። ቀጣዩን ዙር ይጠብቁ።'
+        : 'ማመልከቻ የሚቻልበት ንቁ ዙር የለም።',
+    );
+  }
   if (!player) throw new AppError('በዚህ ዙር አይጫወቱም።');
 
-  if (!playerHasBingo(player, round)) {
+  // Auto Marking players are judged on every called number, so a mark the
+  // server has not applied yet can never cost them a valid claim.
+  if (player.autoMark !== false) markCalledNumbers(player.cards, ensureMarks(player), round.called);
+  if (!playerHasBingo(player)) {
     throw new AppError('የተሳሳተ ጥያቄ — እስካሁን ቢንጎ የለዎትም። ጨዋታውን ይቀጥሉ።');
   }
 

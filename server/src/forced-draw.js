@@ -101,21 +101,123 @@ function rankTowardWin(a, b) {
   );
 }
 
-function rankNormalDraw(a, b) {
-  return a.opponentWins - b.opponentWins || a.index - b.index;
+/**
+ * Every way a card can reach exactly two patterns: one horizontal row plus a
+ * diagonal or the four corners. Both diagonals together count as three
+ * patterns, so that combination is never planned.
+ */
+const TWO_PATTERN_PLANS = ROWS.flatMap((row) =>
+  [MAIN_DIAGONAL, UPWARD_DIAGONAL, FOUR_CORNERS].map((second) => [...row, ...second]),
+);
+
+function maxPatterns(cards, calledSet) {
+  let best = 0;
+  for (const card of cards || []) {
+    best = Math.max(best, completedPatterns(card, calledSet).length);
+  }
+  return best;
+}
+
+/**
+ * The two-pattern plan with the fewest numbers still to call, across all of
+ * the forced player's cards. Recomputed every draw, so it adapts when the
+ * normal draw happens to complete part of another plan.
+ */
+function bestPlanMissing(cards, calledSet) {
+  let best = null;
+  for (const card of cards || []) {
+    for (const cells of TWO_PATTERN_PLANS) {
+      const missing = new Set();
+      for (const [col, row] of cells) {
+        const number = card?.[col]?.[row];
+        if (number && !calledSet.has(number)) missing.add(number);
+      }
+      if (!best || missing.size < best.size) best = missing;
+    }
+  }
+  return best || new Set();
+}
+
+/** Lowest opponent risk first, then the deck's own shuffled (pop) order. */
+function rankNatural(a, b) {
+  return a.opponentWins - b.opponentWins || b.index - a.index;
+}
+
+/**
+ * Planned forced win that looks like a normal round:
+ * - the numbers the forced card still needs for exactly two patterns are
+ *   spread randomly across the round, with the last one reserved for the
+ *   target call;
+ * - every other call is an ordinary shuffled draw that never gives the forced
+ *   player bingo early;
+ * - once the forced player has bingo, calls avoid their card so a slow claim
+ *   does not pile up extra lines.
+ */
+function choosePlannedNumber({ deck, calledSet, players, forcedPlayer, target, random }) {
+  const cards = forcedPlayer.cards || [];
+  const drawNumber = calledSet.size;
+  const candidates = [];
+  deck.forEach((number, index) => {
+    if (calledSet.has(number)) return;
+    const projected = new Set(calledSet);
+    projected.add(number);
+    candidates.push({
+      number,
+      index,
+      projected,
+      onForcedCard: cards.some((card) => cardHasNumber(card, number)),
+      forcedBingo: cardHasBingo(cards, projected),
+      opponentWins: opponentCompletions(players, forcedPlayer, calledSet, projected),
+    });
+  });
+  if (!candidates.length) return null;
+
+  const pick = (pool) => (pool.length ? [...pool].sort(rankNatural)[0].number : null);
+
+  if (cardHasBingo(cards, calledSet)) {
+    return pick(candidates.filter((c) => !c.onForcedCard)) ?? pick(candidates);
+  }
+
+  const remaining = bestPlanMissing(cards, calledSet);
+  const callsLeft = Math.max(1, target - drawNumber); // includes this call
+  const filler = () =>
+    pick(candidates.filter((c) => !remaining.has(c.number) && !c.forcedBingo)) ??
+    pick(candidates.filter((c) => !c.forcedBingo));
+
+  if (remaining.size <= 1) {
+    if (callsLeft > 1) return filler() ?? pick(candidates);
+    // Target call: finish with as few patterns as possible (normally exactly
+    // two). If finishing now would also hand a real player bingo, wait a call.
+    const finishers = candidates
+      .filter((c) => c.forcedBingo)
+      .map((c) => ({ ...c, patterns: maxPatterns(cards, c.projected) }))
+      .sort((a, b) => a.opponentWins - b.opponentWins || a.patterns - b.patterns || b.index - a.index);
+    const best = finishers[0];
+    if (best && best.opponentWins === 0) return best.number;
+    return filler() ?? best?.number ?? pick(candidates);
+  }
+
+  // Spread the remaining plan numbers (except the last) over the calls before
+  // the target, so the forced card fills at a natural pace.
+  const spread = remaining.size - 1;
+  const slots = Math.max(1, callsLeft - 1);
+  const needPlan = spread >= slots || random() < spread / slots;
+  if (needPlan) {
+    const planPick = pick(
+      candidates.filter((c) => remaining.has(c.number) && !c.forcedBingo && c.opponentWins === 0),
+    );
+    if (planPick != null) return planPick;
+  }
+  return filler() ?? pick(candidates);
 }
 
 /**
  * Chooses the next number when a forced winner is active.
  *
  * Without a plan (`targetCalled` 0) it keeps the original behaviour: only
- * numbers printed on the forced player's card are considered. The engine now
- * supplies a plan so the win is built over a normal-length round instead of
- * completing in the first few calls:
- *
- * - warm-up: draw normally, but never finish the forced player early;
- * - build: prefer forced-card numbers while still holding the win back;
- * - finish: complete the forced player while avoiding another real winner.
+ * numbers printed on the forced player's card are considered. With a plan the
+ * engine builds a normal-looking two-pattern win that lands on the target call
+ * (see choosePlannedNumber).
  *
  * Returns null when there is no forced player or no suitable number, allowing
  * the caller to fall back to the normal shuffled deck.
@@ -126,20 +228,14 @@ export function chooseForcedNumber({
   players,
   forcedPlayer,
   targetCalled = 0,
-  warmupCalls = 0,
+  random = Math.random,
 }) {
   if (!forcedPlayer || !Array.isArray(deck) || deck.length === 0) return null;
 
   const calledSet = called instanceof Set ? called : new Set(called || []);
   const target = Math.max(0, Math.floor(Number(targetCalled) || 0));
-  const warmup = Math.max(0, Math.floor(Number(warmupCalls) || 0));
-  const drawNumber = calledSet.size;
-
-  let phase = 'legacy';
   if (target > 0) {
-    if (drawNumber < warmup) phase = 'warmup';
-    else if (drawNumber + 1 < target) phase = 'build';
-    else phase = 'finish';
+    return choosePlannedNumber({ deck, calledSet, players, forcedPlayer, target, random });
   }
 
   const candidates = [];
@@ -164,26 +260,8 @@ export function chooseForcedNumber({
 
   if (!candidates.length) return null;
 
-  let pool = [];
-  if (phase === 'legacy') {
-    pool = candidates.filter((candidate) => candidate.onForcedCard);
-  } else if (phase === 'warmup') {
-    pool = candidates.filter((candidate) => !candidate.forcedBingo);
-  } else if (phase === 'build') {
-    pool = candidates.filter((candidate) => candidate.onForcedCard && !candidate.forcedBingo);
-    if (!pool.length) pool = candidates.filter((candidate) => !candidate.forcedBingo);
-  } else {
-    pool = candidates.filter((candidate) => candidate.onForcedCard && candidate.forcedBingo);
-    if (!pool.length) pool = candidates.filter((candidate) => candidate.onForcedCard);
-    if (!pool.length) pool = candidates.filter((candidate) => candidate.forcedBingo);
-  }
-
-  if (!pool.length) {
-    if (phase === 'legacy') return null;
-    pool = candidates.filter((candidate) => !candidate.forcedBingo);
-    if (!pool.length) pool = candidates;
-  }
-
-  pool.sort(phase === 'warmup' ? rankNormalDraw : rankTowardWin);
+  const pool = candidates.filter((candidate) => candidate.onForcedCard);
+  if (!pool.length) return null;
+  pool.sort(rankTowardWin);
   return pool[0].number;
 }

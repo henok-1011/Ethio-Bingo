@@ -314,8 +314,13 @@ export default function PlayerApp() {
         setGame(result.state);
         setYou(result.state.you || null);
       }
-      haptic('success');
-      toast('🎉 ቢንጎ! በዚህ ዙር አሸንፈዋል!', 'success');
+      if (result?.state?.you?.isWinner) {
+        haptic('success');
+        toast('🎉 ቢንጎ! በዚህ ዙር አሸንፈዋል!', 'success');
+      } else {
+        claimNoticeAt.current = 0;
+        toast('ሌላ ተጫዋች ቀድሞ ቢንጎ ብሏል። ቀጣዩን ዙር ይጠብቁ።', 'error');
+      }
     } catch (err) {
       claimNoticeAt.current = 0;
       toast(err.message, 'error');
