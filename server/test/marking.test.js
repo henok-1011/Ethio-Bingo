@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cardHasBingo, cardsHaveBingo, completedPatterns } from '../src/bingo.js';
+import {
+  cardHasBingo,
+  cardsHaveBingo,
+  completedPatternCells,
+  completedPatterns,
+  winningCardFor,
+  winningPatternCells,
+} from '../src/bingo.js';
 import {
   cardHasNumber,
   emptyMarks,
@@ -94,6 +101,42 @@ test('player bingo is checked card by card, not by mixing marks', () => {
   // One card completing both patterns is a real win.
   marks[0].add(61);
   assert.equal(cardsHaveBingo(cards, marks), true);
+});
+
+test('a result card highlights only completed winning patterns, never a column', () => {
+  const cards = [CARD_A];
+  const marks = emptyMarks(cards);
+
+  // Top row plus the full B column. Columns are not winning patterns, so only
+  // the row should be highlighted on the result card.
+  for (const number of [1, 16, 31, 46, 61, 2, 3, 4, 5]) {
+    assert.equal(markCard(cards, marks, 0, number), true);
+  }
+  assert.deepEqual(completedPatterns(CARD_A, marks[0]), ['horizontal']);
+  assert.equal(winningPatternCells(CARD_A, marks[0]), null);
+
+  const cells = completedPatternCells(CARD_A, marks[0]);
+  assert.equal(cells.length, 5);
+  assert.deepEqual(
+    cells.map(([col, row]) => CARD_A[col][row]).sort((a, b) => a - b),
+    [1, 16, 31, 46, 61],
+  );
+});
+
+test('the result card is the card that completed two patterns', () => {
+  const cards = [CARD_A, CARD_B];
+  const rowOnly = new Set([1, 16, 31, 46, 61]);
+  const realWin = new Set([6, 21, 36, 51, 66, 10, 70]);
+
+  // Card A has one completed row, but card B is the card that won.
+  const winning = winningCardFor(cards, [rowOnly, realWin]);
+  assert.equal(winning.index, 1);
+  assert.equal(winning.line.length, 7);
+
+  // A forced win with a single pattern still gets its completed cells.
+  const forced = winningCardFor([CARD_A], [rowOnly]);
+  assert.equal(forced.index, 0);
+  assert.equal(forced.line.length, 5);
 });
 
 test('two marked patterns win even when the called list is not passed in', () => {

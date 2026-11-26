@@ -56,9 +56,7 @@ export function hasWinningPatterns(card, calledSet = new Set()) {
   return patternCount(card, calledSet) >= 2;
 }
 
-export function winningPatternCells(card, calledSet = new Set()) {
-  const patterns = completedPatterns(card, calledSet);
-  if (patterns.length < 2) return null;
+function cellsForPatterns(card, calledSet, patterns) {
   const cells = [];
   if (patterns.includes('diagonal')) cells.push(...MAIN_DIAGONAL, ...UPWARD_DIAGONAL);
   if (patterns.includes('upward')) cells.push(...UPWARD_DIAGONAL);
@@ -68,6 +66,19 @@ export function winningPatternCells(card, calledSet = new Set()) {
   const unique = new Map();
   for (const [col, row] of cells) unique.set(col + '-' + row, [col, row]);
   return [...unique.values()];
+}
+
+/** Cells of every completed pattern; used by the result card for forced wins. */
+export function completedPatternCells(card, calledSet = new Set()) {
+  const patterns = completedPatterns(card, calledSet);
+  if (!patterns.length) return null;
+  return cellsForPatterns(card, calledSet, patterns);
+}
+
+export function winningPatternCells(card, calledSet = new Set()) {
+  const patterns = completedPatterns(card, calledSet);
+  if (patterns.length < 2) return null;
+  return cellsForPatterns(card, calledSet, patterns);
 }
 
 export function letterFor(number) {

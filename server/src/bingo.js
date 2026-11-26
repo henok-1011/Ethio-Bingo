@@ -114,9 +114,7 @@ export function hasWinningPatterns(card, calledSet = new Set()) {
   return patternCount(card, calledSet) >= 2;
 }
 
-export function winningPatternCells(card, calledSet = new Set()) {
-  const patterns = completedPatterns(card, calledSet);
-  if (patterns.length < 2) return null;
+function cellsForPatterns(card, calledSet, patterns) {
   const cells = [];
   if (patterns.includes('diagonal')) cells.push(...MAIN_DIAGONAL, ...UPWARD_DIAGONAL);
   if (patterns.includes('upward')) cells.push(...UPWARD_DIAGONAL);
@@ -126,6 +124,43 @@ export function winningPatternCells(card, calledSet = new Set()) {
   const unique = new Map();
   for (const [col, row] of cells) unique.set(col + '-' + row, [col, row]);
   return [...unique.values()];
+}
+
+/**
+ * Every cell that belongs to a completed pattern, even when the card has only
+ * one (a forced win). Columns are not winning patterns, so a completed column
+ * is never highlighted.
+ */
+export function completedPatternCells(card, calledSet = new Set()) {
+  const patterns = completedPatterns(card, calledSet);
+  if (!patterns.length) return null;
+  return cellsForPatterns(card, calledSet, patterns);
+}
+
+export function winningPatternCells(card, calledSet = new Set()) {
+  const patterns = completedPatterns(card, calledSet);
+  if (patterns.length < 2) return null;
+  return cellsForPatterns(card, calledSet, patterns);
+}
+
+/**
+ * Picks the card that actually won. A player can hold several cards, so prefer
+ * the one with two completed patterns; only a forced win falls back to the
+ * first card with a single completed pattern.
+ */
+export function winningCardFor(cards, markedSets = []) {
+  const list = cards || [];
+  let fallback = null;
+  for (let index = 0; index < list.length; index += 1) {
+    const marks = markedSets[index] || new Set();
+    const line = winningPatternCells(list[index], marks);
+    if (line) return { index, line };
+    if (!fallback) {
+      const completed = completedPatternCells(list[index], marks);
+      if (completed) fallback = { index, line: completed };
+    }
+  }
+  return fallback;
 }
 
 function lineComplete(card, calledSet, line) {

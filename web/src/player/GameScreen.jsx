@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { etb, seconds } from '../format.js';
-import { COLUMNS, RANGES, callLabel, winningPatternCells } from '../bingo.js';
+import { COLUMNS, RANGES, callLabel, completedPatternCells, winningPatternCells } from '../bingo.js';
 import { playCallClip, preloadCallClips, stopCallAudio } from '../voice.js';
 
 
@@ -85,8 +85,13 @@ function WinnerOverlay({ game, you }) {
 
           <div className="winner-cards">
             {winners.map((winner, index) => {
-              const lineSet = new Set((winner.line || []).map(([col, row]) => `${col}-${row}`));
-              const markedNumbers = new Set(Array.isArray(winner.marked) ? winner.marked : [...called]);
+              const markedList = Array.isArray(winner.marked) ? winner.marked : null;
+              const markedNumbers = new Set(markedList || called);
+              // Recompute the completed patterns for the shown card so every
+              // winning row, diagonal or corner is red and nothing else is.
+              const conditionCells =
+                markedList && winner.card ? completedPatternCells(winner.card, markedNumbers) : null;
+              const lineSet = new Set((conditionCells || winner.line || []).map(([col, row]) => `${col}-${row}`));
               const phone = maskedPhone(winner);
               return (
                 <article

@@ -1,6 +1,6 @@
 import { prisma } from './db.js';
 import { getSettings, setSetting } from './settings.js';
-import { cardsHaveBingo, generateCard, shuffleDeck, winningLineFor, winningPatternCells } from './bingo.js';
+import { cardsHaveBingo, generateCard, shuffleDeck, winningCardFor } from './bingo.js';
 import { emptyMarks, markCard, markCalledNumbers, unmarkCard } from './marking.js';
 import { broadcast, broadcastState, emitToUser } from './realtime.js';
 import { AppError } from './util.js';
@@ -97,19 +97,16 @@ function winnerCardFor(player) {
   const cards = player.cards || [];
   const slots = player.slots || [];
   const marks = ensureMarks(player);
-  for (let index = 0; index < cards.length; index += 1) {
-    // Show every completed pattern. A forced winner with only one pattern
-    // falls back to that line so the result card still has a highlight.
-    const line =
-      winningPatternCells(cards[index], marks[index]) || winningLineFor(cards[index], marks[index]);
-    if (line) {
-      return {
-        card: cards[index],
-        line,
-        marked: [...marks[index]].sort((a, b) => a - b),
-        cardNumber: slots[index] || index + 1,
-      };
-    }
+  // Show the card that actually completed the winning patterns, not the first
+  // card that happens to have one completed row.
+  const winning = winningCardFor(cards, marks);
+  if (winning) {
+    return {
+      card: cards[winning.index],
+      line: winning.line,
+      marked: [...marks[winning.index]].sort((a, b) => a - b),
+      cardNumber: slots[winning.index] || winning.index + 1,
+    };
   }
   return cards.length
     ? {
