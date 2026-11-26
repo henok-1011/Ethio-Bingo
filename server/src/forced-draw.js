@@ -132,10 +132,16 @@ function bestPlanMissing(cards, calledSet) {
         const number = card?.[col]?.[row];
         if (number && !calledSet.has(number)) missing.add(number);
       }
-      if (!best || missing.size < best.size) best = missing;
+      // Prefer plans that finish at exactly two patterns. A row that also
+      // completes the second diagonal would finish with three or four.
+      const finished = new Set([...calledSet, ...missing]);
+      const extra = completedPatterns(card, finished).length > 2 ? 1 : 0;
+      if (!best || extra < best.extra || (extra === best.extra && missing.size < best.missing.size)) {
+        best = { extra, missing };
+      }
     }
   }
-  return best || new Set();
+  return best?.missing || new Set();
 }
 
 /** Lowest opponent risk first, then the deck's own shuffled (pop) order. */
@@ -192,9 +198,14 @@ function choosePlannedNumber({ deck, calledSet, players, forcedPlayer, target, r
       .filter((c) => c.forcedBingo)
       .map((c) => ({ ...c, patterns: maxPatterns(cards, c.projected) }))
       .sort((a, b) => a.opponentWins - b.opponentWins || a.patterns - b.patterns || b.index - a.index);
-    const best = finishers[0];
-    if (best && best.opponentWins === 0) return best.number;
-    return filler() ?? best?.number ?? pick(candidates);
+    const clean = finishers.find((c) => c.opponentWins === 0 && c.patterns === 2);
+    if (clean) return clean.number;
+    // Rather than finish with three or four lines (or hand a real player
+    // bingo), wait a few calls; only give up on that well past the target.
+    const overdue = drawNumber - target >= 10;
+    const safe = finishers.find((c) => c.opponentWins === 0);
+    if (overdue && safe) return safe.number;
+    return filler() ?? safe?.number ?? finishers[0]?.number ?? pick(candidates);
   }
 
   // Spread the remaining plan numbers (except the last) over the calls before

@@ -132,15 +132,25 @@ async function seatPlannedBot(round, plan) {
 
   const slot = freeSlots[Math.floor(Math.random() * freeSlots.length)];
   const cards = [cardForSlot(round, slot)];
-  const row = await prisma.gamePlayer.create({
-    data: {
-      gameId: round.id,
-      isBot: true,
-      botName: plan.name,
-      cards: JSON.stringify(cards),
-      paidStake: 0,
-    },
-  });
+  // Reserve the number before the database write. Otherwise a player could
+  // buy the same card number during the await and both would hold it.
+  const pending = `bot-pending:${plan.name}`;
+  round.taken.set(slot, pending);
+  let row;
+  try {
+    row = await prisma.gamePlayer.create({
+      data: {
+        gameId: round.id,
+        isBot: true,
+        botName: plan.name,
+        cards: JSON.stringify(cards),
+        paidStake: 0,
+      },
+    });
+  } catch (err) {
+    if (round.taken.get(slot) === pending) round.taken.delete(slot);
+    throw err;
+  }
 
   plan.seated = true;
   round.taken.set(slot, row.id);
@@ -545,6 +555,11 @@ async function startCalling() {
   // Lock the table first so no more card changes can race the kickoff.
   round.status = 'CALLING';
   round.nextCallAt = Date.now();
+  // New picks/deselects are now refused. Let any already in flight finish so
+  // the pot and table below include them and nobody changes cards mid-round.
+  for (let waited = 0; state.joining.size && waited < 5000; waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   // Anyone who has not bought yet gets their card before the first call so a
   // manually started round still has the configured table.
   await seatAllPlannedBots(round);
